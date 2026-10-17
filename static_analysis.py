@@ -103,5 +103,48 @@ def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
         traceback.print_exc()
         return None
 
+def _parseExportedComponents(manifest_findings: list) -> dict:
+    """Parses exported components findings from MobSF report."""
+    unprotected = []
+    permission_protected = []
 
-        
+    for finding in manifest_findings:
+        rule = finding.get("rule", "")
+        title = finding.get("title", "").lower()
+        desc = finding.get("description", "").lower()
+        comp_list = finding.get("component", [])
+
+        # Extract component type and name (e.g., ["Activity", "com.example.MainActivity"])
+        comp_label = f"{comp_list[0]}: {comp_list[1]}" if len(comp_list) >= 2 else str(comp_list)
+
+        if rule in ("explicitly_exported", "exported_intent_filter_exists"):
+            if "not protected" in title or "not protected" in desc or "shared with other apps" in desc:
+                unprotected.append(comp_label)
+        elif rule.startswith("exported_protected_permission"):
+            # Has a permission requirement, even if protectionLevel needs review
+            perm_info = comp_list[2] if len(comp_list) >= 3 else rule
+            permission_protected.append(f"{comp_label} ({perm_info})")
+
+    return {
+        "exported_components_unprotected": "Yes" if unprotected else "No",
+        "unprotected_components_list": "; ".join(unprotected) if unprotected else "None",
+        "permission_protected_exported_list": "; ".join(permission_protected) if permission_protected else "None",
+    }
+
+def mobsfParse(report_data: dict):
+    """Parses MobSF JSON report and saves relevant findings to CSV."""
+    results = {
+        "num_dangerous_permissions": 0,
+        "dangerous_permissions_list": "None",
+        "num_3rd_party_sdks": 0,
+        "num_hardcoded_secrets": 0,
+        "cleartext_traffic_allowed": "No",
+        "exported_components_unprotected": "No",
+        "insecure_data_storage_detected": "No",
+        "webview_insecure_config_detected": "No",
+        "cert_pinning": "No",
+        "health_related_findings": "No",
+        "mobsf_status": "Success"
+    }
+
+    
