@@ -24,6 +24,7 @@ HEADERS = {"Authorization": MOBSF_API_KEY}
 
 
 def getApkFiles():
+    '''Performs a recursive search for APK files in the APK_INPUT_DIR, including .apk, .xapk, and .apkm files. Extracts .apk files from .xapk and .apkm archives and filters out excluded patterns. Returns a list of filtered APK file paths and their corresponding app IDs.'''
     search_patterns = ["*.apk", "*.xapk", "*.apkm"]
     exclude_patterns = ["config.*", "split_config.*"]
     all_apks = []
@@ -39,6 +40,7 @@ def getApkFiles():
         if filename.endswith((".xapk", ".apkm")):
             apk = APK(f)
             try:
+                # Extract the .apk file from the .xapk or .apkm archive, finds base file, and add it to the filtered_files list
                 with zipfile.ZipFile(f, "r") as zip_ref:
                     zip_ref.extractall(ARTIFACTS_DIR / Path(f).stem)
                     filename = Path(f).stem
@@ -49,6 +51,7 @@ def getApkFiles():
             except zipfile.BadZipFile:
                 print(f"Error: {f} is not a valid zip file.")
         else:
+            # If the file is a regular .apk file, check if it matches any exclude patterns
             if not any(fnmatch.fnmatch(filename, pattern) for pattern in exclude_patterns):
                 app_ids.append(str(Path(f).parent.name))
                 filtered_files.append(str(f))
@@ -106,30 +109,20 @@ def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
 def _parseExportedComponents(manifest_findings: list) -> dict:
     """Parses exported components findings from MobSF report."""
     unprotected = []
-    permission_protected = []
 
+    # Loop through each finding and categorize exported components based on protection status
     for finding in manifest_findings:
         rule = finding.get("rule", "")
         title = finding.get("title", "").lower()
         desc = finding.get("description", "").lower()
-        comp_list = finding.get("component", [])
 
-        # Extract component type and name (e.g., ["Activity", "com.example.MainActivity"])
-        comp_label = f"{comp_list[0]}: {comp_list[1]}" if len(comp_list) >= 2 else str(comp_list)
-
+        # Check for unprotected exported components based on rule and description
         if rule in ("explicitly_exported", "exported_intent_filter_exists"):
             if "not protected" in title or "not protected" in desc or "shared with other apps" in desc:
-                unprotected.append(comp_label)
-        elif rule.startswith("exported_protected_permission"):
-            # Has a permission requirement, even if protectionLevel needs review
-            perm_info = comp_list[2] if len(comp_list) >= 3 else rule
-            permission_protected.append(f"{comp_label} ({perm_info})")
+                return {"exported_components_unprotected": "Yes"}
+            
+    return {"exported_components_unprotected": "No"}
 
-    return {
-        "exported_components_unprotected": "Yes" if unprotected else "No",
-        "unprotected_components_list": "; ".join(unprotected) if unprotected else "None",
-        "permission_protected_exported_list": "; ".join(permission_protected) if permission_protected else "None",
-    }
 
 def mobsfParse(report_data: dict):
     """Parses MobSF JSON report and saves relevant findings to CSV."""
