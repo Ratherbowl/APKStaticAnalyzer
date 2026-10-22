@@ -22,7 +22,6 @@ MOBSF_URL = "http://localhost:8000"
 MOBSF_API_KEY = "81cd67c1a301e2fe23f4c1fc59e51bde06d1beb0ea52ceb7e5766c8170fd90b7"
 HEADERS = {"Authorization": MOBSF_API_KEY}
 
-
 def getApkFiles():
     '''Performs a recursive search for APK files in the APK_INPUT_DIR, including .apk, .xapk, and .apkm files. Extracts .apk files from .xapk and .apkm archives and filters out excluded patterns. Returns a list of filtered APK file paths and their corresponding app IDs.'''
     search_patterns = ["*.apk", "*.xapk", "*.apkm"]
@@ -74,7 +73,7 @@ def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
         scan_hash = upload_data.get("hash")
         file_name = upload_data.get("file_name")
 
-        scan_payload = {"scan_type": "apk", "file_name": upload_data.get("file_name"), "hash": scan_hash}
+        scan_payload = {"scan_type": "apk", "file_name": file_name, "hash": scan_hash}
         
         # 2. Trigger the scan. MobSF returns the FULL JSON report right here when it finishes.
         scan_res = requests.post(f"{MOBSF_URL}/api/v1/scan", headers=HEADERS, data=scan_payload, timeout=600)
@@ -108,8 +107,6 @@ def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
 
 def _parseExportedComponents(manifest_findings: list) -> dict:
     """Parses exported components findings from MobSF report."""
-    unprotected = []
-
     # Loop through each finding and categorize exported components based on protection status
     for finding in manifest_findings:
         rule = finding.get("rule", "")
@@ -122,6 +119,42 @@ def _parseExportedComponents(manifest_findings: list) -> dict:
                 return {"exported_components_unprotected": "Yes"}
             
     return {"exported_components_unprotected": "No"}
+
+def _parseEncryptionAndStorage(report_data: dict) -> dict:
+    '''Parses encryption and storage findings from MobSF report.'''
+    enc_indicators = ["android_db_encryption", "android_sql_cipher", "android_sql_cipher_aes256"]
+    insecure_storage = [
+    "android_hiddenui",
+    "android_aes_ecb",
+    "android_aws_ecb_default",
+    "android_rsa_no_oaep",
+    "android_world_writable",
+    "android_world_readable",
+    "android_world_read_write",
+    "android_weak_ciphers",
+    "cbc_padding_oracle",
+    "android_sql_raw_query",
+    "android_read_write_external",
+    ]
+    android_api = report_data.get("android_api", {})
+    code_findings = report_data.get("code_analysis", {}).get("findings", {})
+
+    crypto_files = list(android_api.get("api_crypto", {}).get("files", {}).keys())
+    search_corpus = [f.lower() for f in list(code_findings.keys())]
+
+    encryption_detected = "No"
+
+    if crypto_files:
+        encryption_detected = "Yes"
+    else:
+        for item in search_corpus:
+            if any(indicator in item for indicator in enc_indicators):
+                encryption_detected = "Yes"
+                break
+
+    insecure_storage = "Yes" if any(rule in code_findings for rule in insecure_storage) else "No"
+    
+    return {"encryption_at_rest": encryption_detected, "insecure_data_storage_detected": insecure_storage}
 
 
 def mobsfParse(report_data: dict):
@@ -139,5 +172,3 @@ def mobsfParse(report_data: dict):
         "health_related_findings": "No",
         "mobsf_status": "Success"
     }
-
-    
