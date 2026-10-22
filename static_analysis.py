@@ -156,6 +156,27 @@ def _parseEncryptionAndStorage(report_data: dict) -> dict:
     
     return {"encryption_at_rest": encryption_detected, "insecure_data_storage_detected": insecure_storage}
 
+def _parse_certificate_pinning(report_data: dict) -> dict:
+    '''Parses certificate pinning findings from MobSF report.'''
+    code_findings = report_data.get("code_analysis", {}).get("findings", {})
+    net_findings = report_data.get("network_security", {}).get("network_findings", [])
+
+    # Check for the explicit MobSF rule OR any pinning in the network config
+    if "android_ssl_pinning" in code_findings:
+        return {"cert_pinning_detected": "Yes"}
+
+    for finding in net_findings:
+        title = str(finding.get("title", "").lower())
+        desc = str(finding.get("description", "").lower())
+        severity = str(finding.get("severity", "")).lower()
+
+        is_pin_config = "pin-set" in desc or "pin-set" in title or "pinning" in title
+        is_not_vulnerability = severity in ("secure", "info") and "missing" not in desc
+
+        if is_pin_config and is_not_vulnerability:
+            return {"cert_pinning_detected": "Yes"}
+    
+    return {"cert_pinning_detected": "No"}
 
 def mobsfParse(report_data: dict):
     """Parses MobSF JSON report and saves relevant findings to CSV."""
@@ -172,3 +193,4 @@ def mobsfParse(report_data: dict):
         "health_related_findings": "No",
         "mobsf_status": "Success"
     }
+
