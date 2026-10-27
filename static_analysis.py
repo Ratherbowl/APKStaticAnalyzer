@@ -180,7 +180,13 @@ def _parseCertificatePinning(report_data: dict) -> dict:
     
     return {"cert_pinning_detected": "No"}
 
-
+def _parseWebviewRisks(report_data: dict) -> dict:
+    code_findings = report_data.get("code_analysis", {}).get("findings", {})
+    
+    # Check for any findings related to insecure WebView configurations
+    insecure_webview = "Yes" if any(key.startswith("android_webview") for key in code_findings) else "No"
+    
+    return {"webview_insecure_config_detected": insecure_webview}
 
 def mobsfParse(report_data: dict):
     """Parses MobSF JSON report and saves relevant findings to CSV."""
@@ -197,4 +203,3 @@ def mobsfParse(report_data: dict):
         "health_related_findings": "No",
         "mobsf_status": "Success"
     }
-
