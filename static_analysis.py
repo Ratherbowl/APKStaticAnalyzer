@@ -122,7 +122,10 @@ def _parseExportedComponents(manifest_findings: list) -> dict:
 
 def _parseEncryptionAndStorage(report_data: dict) -> dict:
     '''Parses encryption and storage findings from MobSF report.'''
-    enc_indicators = ["android_db_encryption", "android_sql_cipher", "android_sql_cipher_aes256"]
+    enc_indicators = ["android_db_encryption", "android_sql_cipher",
+                      "android_sql_cipher_aes256", "androidx.security.crypto",
+                      "androidx.datastore", "android.security.keystore", "java.security", 
+                      "javax.crypto", "javax.crypto.spec"]
     insecure_storage = [
     "android_hiddenui",
     "android_aes_ecb",
@@ -138,16 +141,16 @@ def _parseEncryptionAndStorage(report_data: dict) -> dict:
     ]
     android_api = report_data.get("android_api", {})
     code_findings = report_data.get("code_analysis", {}).get("findings", {})
+    sbom = report_data.get("sbom", {})
 
     crypto_files = list(android_api.get("api_crypto", {}).get("files", {}).keys())
-    search_corpus = [f.lower() for f in list(code_findings.keys())]
+    sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
+
+    search_corpus = [f.lower() for f in (list(code_findings.keys()) + sbom_versioned)]
 
     encryption_detected = "No"
 
-    if crypto_files:
-        encryption_detected = "Yes"
-    else:
-        for item in search_corpus:
+    for item in search_corpus:
             if any(indicator in item for indicator in enc_indicators):
                 encryption_detected = "Yes"
                 break
@@ -190,16 +193,108 @@ def _parseWebviewRisks(report_data: dict) -> dict:
 
 def mobsfParse(report_data: dict):
     """Parses MobSF JSON report and saves relevant findings to CSV."""
+    if not report_data or "error" in report_data:
+        return {"mobsf_status": "API Error"}
+
+    permissions = report_data.get("permissions", {})
+    dangerous_perms = [
+        perm for perm, details in permissions.items()
+        if details.get("status") == "dangerous"
+    ]
+
+    sbom = report_data.get("sbom", {})
+    sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
+    libraries = report_data.get("libraries", [])
+    
+    unique_sdks = set(sbom_versioned + libraries)
+ 
+    secrets = report_data.get("secrets", [])
+
+    manifest_findings = report_data.get("manifest_analysis", {}).get("manifest_findings", [])
+    cleartext_allowed = "Yes" if any(
+        f.get("rule") == "clear_text_traffic" for f in manifest_findings
+    ) else "No"
+
+    exported_data = _parseExportedComponents(manifest_findings)
+    storage_data = _parseEncryptionAndStorage(report_data)
+    pinning_data = _parseCertificatePinning(report_data)
+    webview_data = _parseWebviewRisks(report_data)
+
     results = {
-        "num_dangerous_permissions": 0,
-        "dangerous_permissions_list": "None",
-        "num_3rd_party_sdks": 0,
-        "num_hardcoded_secrets": 0,
-        "cleartext_traffic_allowed": "No",
-        "exported_components_unprotected": "No",
-        "insecure_data_storage_detected": "No",
-        "webview_insecure_config_detected": "No",
-        "cert_pinning": "No",
-        "health_related_findings": "No",
+        "num_dangerous_permissions": len(dangerous_perms),
+        "dangerous_permissions_list": ", ".join(dangerous_perms),
+        "num_3rd_party_sdks": len(unique_sdks),
+        "num_hardcoded_secrets": len(secrets),
+        "cleartext_traffic_allowed": cleartext_allowed,
+        "exported_components_unprotected": exported_data.get("exported_components_unprotected", "No"),
+        "insecure_data_storage_detected": storage_data.get("insecure_data_storage_detected", "No"),
+        "webview_insecure_config_detected": webview_data.get("webview_insecure_config_detected", "No"),
+        "cert_pinning": pinning_data.get("cert_pinning_detected", "No"),
         "mobsf_status": "Success"
     }
+
+    return results
+
+if __name__ == '__main__':
+    print("[*] Starting batch static analysis pipeline...")
+    
+    # 1. Discover all APKs
+    apks, app_ids = getApkFiles()
+    
+    if not apks:
+        print("[!] No APKs found. Check your APK_INPUT_DIR path.")
+    else:
+        print(f"[*] Found {len(apks)} APKs to process.")
+        
+        # 2. Prepare the CSV file for Tab 3: Static Findings
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        csv_file = ARTIFACTS_DIR / "static_findings_tab3.csv"
+        
+        # Define the CSV headers based on the mobsfParse output keys
+        headers = [
+            "app_id", "num_dangerous_permissions", "dangerous_permissions_list", 
+            "num_3rd_party_sdks", "num_hardcoded_secrets", "cleartext_traffic_allowed", 
+            "exported_components_unprotected", "insecure_data_storage_detected", 
+            "webview_insecure_config_detected", "cert_pinning", "mobsf_status"
+        ]
+        
+        # Open CSV in append/write mode
+        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            
+            # 3. Loop through all discovered APKs
+            for apk_path_str, app_id in zip(apks, app_ids):
+                test_apk = Path(apk_path_str)
+                test_out_dir = ARTIFACTS_DIR / app_id
+                
+                print(f"\n{'='*60}\n[*] Processing: {test_apk.name} ({app_id})\n{'='*60}")
+                
+                # Execute the MobSF Docker scan
+                raw_report = mobsfScan(app_id, test_apk, test_out_dir)
+                
+                if raw_report and "error" not in raw_report:
+                    print(f"[*] MobSF Scan complete. Parsing metrics...")
+                    
+                    # Extract the metrics
+                    final_csv_row = mobsfParse(raw_report)
+                    
+                    # Inject the app_id into the dictionary so we know which app this row belongs to
+                    final_csv_row["app_id"] = app_id 
+                    
+                    # Write the row to the CSV
+                    writer.writerow(final_csv_row)
+                    # Force write to disk immediately in case the script crashes on the next app
+                    f.flush() 
+                    
+                    print(f"[*] Success! Saved metrics for {app_id} to CSV.")
+                else:
+                    print(f"[!] Pipeline aborted for {app_id}. MobSF failed to return a valid report.")
+                    # Write an error row so you don't lose track of failures in your dataset
+                    error_row = {h: "Error" for h in headers}
+                    error_row["app_id"] = app_id
+                    error_row["mobsf_status"] = "Failed"
+                    writer.writerow(error_row)
+                    f.flush()
+
+        print(f"\n[*] Batch processing complete. Master CSV saved to {csv_file}")
