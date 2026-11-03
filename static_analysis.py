@@ -11,6 +11,7 @@ import datetime
 import traceback
 from pathlib import Path
 from apk_info import APK
+import re
 
 APK_INPUT_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/APKs/")
 ARTIFACTS_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/Output/")
@@ -57,6 +58,36 @@ def getApkFiles():
 
     return filtered_files, app_ids
 
+def adfParse(dot_file: Path | None) -> dict:
+    """Parses the ADF report and returns a dictionary of relevant findings."""
+    class_found = "No"
+    evidence_items = []
+
+    if dot_file and Path(dot_file).exists():
+        dot_content = Path(dot_file).read_text(encoding="utf-8", errors="replace")
+
+        # Matches only quoted "prefix::value" nodes;
+        pattern = re.compile(r'"(adstr|nattr|lay|frag|act|img)::((?:\\.|[^"\\])*)"')
+
+        for prefix, value in pattern.findall(dot_content):
+            clean_val = (
+                value.replace(r'\"', '"')
+                       .replace(r'\/', '/')
+                       .replace(r'\&', '&')
+                       .replace(r'\\', '\\')
+                       .strip()
+            )
+
+            if clean_val and clean_val not in evidence_items:
+                evidence_items.append(clean_val)
+    
+    return {
+        "delete_account_class_found": "Yes" if evidence_items else "No",
+        "delete_account_string_evidence": ", ".join(evidence_items) if evidence_items else "None"
+    }
+
+            
+    
 def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
     """Uploads, scans, and retrieves JSON report from MobSF REST API."""
     print(f"[*] Submitting {Path(apk_file).name} to MobSF Docker...")
@@ -139,11 +170,10 @@ def _parseEncryptionAndStorage(report_data: dict) -> dict:
     "android_sql_raw_query",
     "android_read_write_external",
     ]
-    android_api = report_data.get("android_api", {})
+
     code_findings = report_data.get("code_analysis", {}).get("findings", {})
     sbom = report_data.get("sbom", {})
 
-    crypto_files = list(android_api.get("api_crypto", {}).get("files", {}).keys())
     sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
 
     search_corpus = [f.lower() for f in (list(code_findings.keys()) + sbom_versioned)]
@@ -191,6 +221,56 @@ def _parseWebviewRisks(report_data: dict) -> dict:
     
     return {"webview_insecure_config_detected": insecure_webview}
 
+def _parseHealthFindings(report_data: dict) -> dict:
+    '''Parses health findings from MobSF report.'''
+    health_permissions = {
+        "android.permission.BODY_SENSORS", 
+        "android.permission.BODY_SENSORS_BACKGROUND", 
+        "android.permission.REQUEST_COMPANION_PROFILE_MEDICAL", 
+        "android.permission.FOREGROUND_SERVICE_HEALTH", 
+        "android.permission.ACTIVITY_RECOGNITION"
+    }
+
+    health_packages = {
+        "android.health.connect", 
+        "android.health.connect.changelog", 
+        "android.health.connect.datatypes", 
+        "android.health.connect.datatypes.units", 
+        "androidx.health.connect.client",
+        "androidx.health.connect.client.aggregate", 
+        "androidx.health.connect.client.changes",
+        "androidx.health.connect.client.records",
+        "androidx.health.connect.client.request",
+        "androidx.health.connect.client.response",
+        "androidx.health.connect.client.time",
+        "androidx.health.connect.client.units",
+        "androidx.health.services.client",
+        "androidx.health.services.client.data",
+        "com.google.android.gms.fitness",
+        "com.google.android.gms.fitness.data",
+        "com.google.android.gms.fitness.request",
+        "com.google.android.gms.fitness.result",
+        "com.google.android.gms.fitness.service"
+    }
+
+    permissions = set(report_data.get("permissions", {}).keys())
+    sbom = report_data.get("sbom", {})
+    sbom_packages = sbom.get("sbom_packages", []) + [str(x) for x in sbom.get("sbom_versioned", [])]
+    search_corpus = [f.lower() for f in sbom_packages]
+
+    health_detected = "No"
+
+    if any(perm in permissions for perm in health_permissions):
+        health_detected = "Yes"
+    else:
+        for item in search_corpus:
+            if any(pkg in item for pkg in health_packages):
+                health_detected = "Yes"
+                break
+
+    return {"health_related_findings": health_detected}
+
+
 def mobsfParse(report_data: dict):
     """Parses MobSF JSON report and saves relevant findings to CSV."""
     if not report_data or "error" in report_data:
@@ -219,82 +299,23 @@ def mobsfParse(report_data: dict):
     storage_data = _parseEncryptionAndStorage(report_data)
     pinning_data = _parseCertificatePinning(report_data)
     webview_data = _parseWebviewRisks(report_data)
+    health_data = _parseHealthFindings(report_data)
 
     results = {
         "num_dangerous_permissions": len(dangerous_perms),
         "dangerous_permissions_list": ", ".join(dangerous_perms),
         "num_3rd_party_sdks": len(unique_sdks),
+        "sdk_list": ", ".join(unique_sdks),
         "num_hardcoded_secrets": len(secrets),
         "cleartext_traffic_allowed": cleartext_allowed,
         "exported_components_unprotected": exported_data.get("exported_components_unprotected", "No"),
         "insecure_data_storage_detected": storage_data.get("insecure_data_storage_detected", "No"),
+        "encryption_at_rest": storage_data.get("encryption_at_rest", "No"),
         "webview_insecure_config_detected": webview_data.get("webview_insecure_config_detected", "No"),
+        "health_related_findings": health_data.get("health_related_findings", "No"),
         "cert_pinning": pinning_data.get("cert_pinning_detected", "No"),
         "mobsf_status": "Success"
     }
 
     return results
 
-if __name__ == '__main__':
-    print("[*] Starting batch static analysis pipeline...")
-    
-    # 1. Discover all APKs
-    apks, app_ids = getApkFiles()
-    
-    if not apks:
-        print("[!] No APKs found. Check your APK_INPUT_DIR path.")
-    else:
-        print(f"[*] Found {len(apks)} APKs to process.")
-        
-        # 2. Prepare the CSV file for Tab 3: Static Findings
-        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-        csv_file = ARTIFACTS_DIR / "static_findings_tab3.csv"
-        
-        # Define the CSV headers based on the mobsfParse output keys
-        headers = [
-            "app_id", "num_dangerous_permissions", "dangerous_permissions_list", 
-            "num_3rd_party_sdks", "num_hardcoded_secrets", "cleartext_traffic_allowed", 
-            "exported_components_unprotected", "insecure_data_storage_detected", 
-            "webview_insecure_config_detected", "cert_pinning", "mobsf_status"
-        ]
-        
-        # Open CSV in append/write mode
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=headers)
-            writer.writeheader()
-            
-            # 3. Loop through all discovered APKs
-            for apk_path_str, app_id in zip(apks, app_ids):
-                test_apk = Path(apk_path_str)
-                test_out_dir = ARTIFACTS_DIR / app_id
-                
-                print(f"\n{'='*60}\n[*] Processing: {test_apk.name} ({app_id})\n{'='*60}")
-                
-                # Execute the MobSF Docker scan
-                raw_report = mobsfScan(app_id, test_apk, test_out_dir)
-                
-                if raw_report and "error" not in raw_report:
-                    print(f"[*] MobSF Scan complete. Parsing metrics...")
-                    
-                    # Extract the metrics
-                    final_csv_row = mobsfParse(raw_report)
-                    
-                    # Inject the app_id into the dictionary so we know which app this row belongs to
-                    final_csv_row["app_id"] = app_id 
-                    
-                    # Write the row to the CSV
-                    writer.writerow(final_csv_row)
-                    # Force write to disk immediately in case the script crashes on the next app
-                    f.flush() 
-                    
-                    print(f"[*] Success! Saved metrics for {app_id} to CSV.")
-                else:
-                    print(f"[!] Pipeline aborted for {app_id}. MobSF failed to return a valid report.")
-                    # Write an error row so you don't lose track of failures in your dataset
-                    error_row = {h: "Error" for h in headers}
-                    error_row["app_id"] = app_id
-                    error_row["mobsf_status"] = "Failed"
-                    writer.writerow(error_row)
-                    f.flush()
-
-        print(f"\n[*] Batch processing complete. Master CSV saved to {csv_file}")
