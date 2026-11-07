@@ -15,7 +15,7 @@ import re
 
 APK_INPUT_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/APKs/")
 ARTIFACTS_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/Output/")
-ADF_DIR = Path.home() / "AccountDeletionAnalyzer"
+ADF_DIR = Path(__file__).resolve().parent.parent / "AccountDeletionAnalyzer_Ubuntu"
 FLOWDROID_JAR = Path.home() / "FlowDroid" / "soot-infoflow-cmd-jar-with-dependencies.jar"
 ANDROID_JARS = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/AppData/Local/Android/Sdk/platforms")
 
@@ -23,44 +23,12 @@ MOBSF_URL = "http://localhost:8000"
 MOBSF_API_KEY = "81cd67c1a301e2fe23f4c1fc59e51bde06d1beb0ea52ceb7e5766c8170fd90b7"
 HEADERS = {"Authorization": MOBSF_API_KEY}
 
-def getApkFiles():
-    '''Performs a recursive search for APK files in the APK_INPUT_DIR, including .apk, .xapk, and .apkm files. Extracts .apk files from .xapk and .apkm archives and filters out excluded patterns. Returns a list of filtered APK file paths and their corresponding app IDs.'''
-    search_patterns = ["*.apk", "*.xapk", "*.apkm"]
-    exclude_patterns = ["config.*", "split_config.*"]
-    all_apks = []
-    app_ids = []
-    for pattern in search_patterns:
-        all_apks.extend(str(f) for f in APK_INPUT_DIR.rglob(pattern) if f.is_file())
-    # Filter out excluded patterns
-    filtered_files = []
-    for f in all_apks:
-        filename = Path(f).name
+def get_all_apks():
+    """Returns a list of all .apk files in the APK_INPUT_DIR."""
+    return list(APK_INPUT_DIR.glob("*.apk"))
 
-        # Check if the file is an .xapk or .apkm file, extract the .apk file from it, and add it to the filtered_files list
-        if filename.endswith((".xapk", ".apkm")):
-            apk = APK(f)
-            try:
-                # Extract the .apk file from the .xapk or .apkm archive, finds base file, and add it to the filtered_files list
-                with zipfile.ZipFile(f, "r") as zip_ref:
-                    zip_ref.extractall(ARTIFACTS_DIR / Path(f).stem)
-                    filename = Path(f).stem
-                    app_ids.append(str(Path(f).parent.name))
-                    filtered_files.append(
-                        str(ARTIFACTS_DIR / filename / (apk.get_package_name() + ".apk"))
-                    )
-            except zipfile.BadZipFile:
-                print(f"Error: {f} is not a valid zip file.")
-        else:
-            # If the file is a regular .apk file, check if it matches any exclude patterns
-            if not any(fnmatch.fnmatch(filename, pattern) for pattern in exclude_patterns):
-                app_ids.append(str(Path(f).parent.name))
-                filtered_files.append(str(f))
-
-    return filtered_files, app_ids
-
-def adfParse(dot_file: Path | None) -> dict:
-    """Parses the ADF report and returns a dictionary of relevant findings."""
-    class_found = "No"
+def _extractDotEvidence(dot_file: Path | None) -> list[str]:
+    """Helper to extract unique node values from an ADF mapping_model_*.dot file."""
     evidence_items = []
 
     if dot_file and Path(dot_file).exists():
@@ -80,10 +48,63 @@ def adfParse(dot_file: Path | None) -> dict:
 
             if clean_val and clean_val not in evidence_items:
                 evidence_items.append(clean_val)
-    
+
+    return evidence_items
+
+def adfScan(app_id: str, apk_file: Path) -> dict[str, Path | None]:
+    """Runs adf_delete.sh and adf_health.sh and copies the resulting .dot files to output_dir."""
+    print(f"[*] Running ADF (deletion & health) for {app_id}...")
+    scripts = {
+        "deletion": (ADF_DIR / "adf_delete.sh", "mapping_model_deletion.dot"),
+        "health": (ADF_DIR / "adf_health.sh", "mapping_model_health.dot"),
+    }
+
+    results = {"deletion": None, "health": None}
+    target_apk = Path(apk_file).resolve()
+    apk_stem = target_apk.stem
+
+    try:
+        # Loop unpacks each script key and its tuple pair (script path, output filename)
+        for key, (script_path, dot_filename) in scripts.items():
+            if not script_path.exists():
+                print(f"[!] ADF script {script_path} not found.")
+                continue
+
+            expected_dot = ADF_DIR / "output" / apk_stem / dot_filename
+            if expected_dot.exists():
+                expected_dot.unlink()  # Remove old .dot file to prevent data collision between runs
+            
+            subprocess.run(
+                ["bash", str(script_path), str(target_apk)],
+                cwd=str(ADF_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=900
+            )
+
+            if expected_dot.exists():
+                results[key] = expected_dot
+                print(f"[*] Success! Found {dot_filename} at {expected_dot}")
+            else:
+                print(f"[!] {script_path.name} did not produce {expected_dot.name}")
+    except subprocess.TimeoutExpired:
+        print(f"[!] ADF script timed out for {app_id}.")
+    except Exception as e:
+        print(f"[!] ADF execution failed for {app_id}: {e}")
+        traceback.print_exc()
+
+    return results
+
+def adfParse(deletion_dot: Path | None, health_dot: Path | None = None) -> dict:
+    """Parses both the deletion and health ADF .dot reports."""
+    del_evidence = _extractDotEvidence(deletion_dot)
+    health_evidence = _extractDotEvidence(health_dot)
+
     return {
-        "delete_account_class_found": "Yes" if evidence_items else "No",
-        "delete_account_string_evidence": ", ".join(evidence_items) if evidence_items else "None"
+        "delete_account_class_found": "Yes" if del_evidence else "No",
+        "delete_account_string_evidence": ", ".join(del_evidence) if del_evidence else "None",
+        "adf_health_detected": "Yes" if health_evidence else "No",
     }
 
             

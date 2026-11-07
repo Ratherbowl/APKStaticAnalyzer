@@ -16,20 +16,8 @@ apkpath=$1
 apkfile=$(basename -- "$apkpath")
 apkdir="${apkfile%.*}"
 outdir=output
-VERBS=("upload" "validate" "verify" "fetch" "submit" "add" "provide")
-NOUNS=("document" "certificate" "covid" "health" "status" "record" "test")
-
-# Build regex patterns for all combinations of verbs and nouns
-patterns=""
-for v in "${VERBS[@]}"; do
-    for n in "${NOUNS[@]}"; do
-        patterns+=".*${v}.*${n}.*|"
-    done
-done
-
-# Remove the trailing pipe from the final string
-patterns="${patterns%|}"
-model=$outdir/$apkdir/mapping_model.dot
+patterns=".*delete.*account.*|.*close.*account.*|.*cancel.*account.*"
+model=$outdir/$apkdir/mapping_model_deletion.dot 
 
 TIMELIMIT=45
 
@@ -55,10 +43,11 @@ dot_escape() {
 [ ! -d "$outdir/$apkdir" ] && apktool d $apkpath -o $outdir/$apkdir
 
 # Convert images to text only the first time
-if [ ! -f "$model" ]; then
+if [ ! -f "$outdir/$apkdir/ocr_complete.flag" ]; then
     find $outdir/$apkdir -type f -exec file {} \; | awk -F: '{if ($2 ~/image/) print $1}' | while IFS= read -r img; do
         tesseract "$img" "${img%.*}.txt"
     done
+    touch "$outdir/$apkdir/ocr_complete.flag"
 fi
 
 # Find and validate AD strings
