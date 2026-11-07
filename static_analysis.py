@@ -10,7 +10,6 @@ import shutil
 import datetime
 import traceback
 from pathlib import Path
-from apk_info import APK
 import re
 
 APK_INPUT_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/APKs/")
@@ -88,6 +87,7 @@ def adfScan(app_id: str, apk_file: Path) -> dict[str, Path | None]:
                 print(f"[*] Success! Found {dot_filename} at {expected_dot}")
             else:
                 print(f"[!] {script_path.name} did not produce {expected_dot.name}")
+
     except subprocess.TimeoutExpired:
         print(f"[!] ADF script timed out for {app_id}.")
     except Exception as e:
@@ -106,8 +106,6 @@ def adfParse(deletion_dot: Path | None, health_dot: Path | None = None) -> dict:
         "delete_account_string_evidence": ", ".join(del_evidence) if del_evidence else "None",
         "adf_health_detected": "Yes" if health_evidence else "No",
     }
-
-            
     
 def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
     """Uploads, scans, and retrieves JSON report from MobSF REST API."""
@@ -162,8 +160,8 @@ def _parseExportedComponents(manifest_findings: list) -> dict:
     # Loop through each finding and categorize exported components based on protection status
     for finding in manifest_findings:
         rule = finding.get("rule", "")
-        title = finding.get("title", "").lower()
-        desc = finding.get("description", "").lower()
+        title = str(finding.get("title", "")).lower()
+        desc = str(finding.get("description", "")).lower()
 
         # Check for unprotected exported components based on rule and description
         if rule in ("explicitly_exported", "exported_intent_filter_exists"):
@@ -172,50 +170,35 @@ def _parseExportedComponents(manifest_findings: list) -> dict:
             
     return {"exported_components_unprotected": "No"}
 
-def _parseEncryptionAndStorage(report_data: dict) -> dict:
-    '''Parses encryption and storage findings from MobSF report.'''
-    enc_indicators = ["android_db_encryption", "android_sql_cipher",
-                      "android_sql_cipher_aes256", "androidx.security.crypto",
-                      "androidx.datastore", "android.security.keystore", "java.security", 
-                      "javax.crypto", "javax.crypto.spec"]
-    insecure_storage = [
-    "android_hiddenui",
-    "android_aes_ecb",
-    "android_aws_ecb_default",
-    "android_rsa_no_oaep",
-    "android_world_writable",
-    "android_world_readable",
-    "android_world_read_write",
-    "android_weak_ciphers",
-    "cbc_padding_oracle",
-    "android_sql_raw_query",
-    "android_read_write_external",
+def _parseEncryptionAndStorage(code_findings: dict, sbom_versioned: list) -> dict:
+    """Parses encryption and storage findings from MobSF report."""
+    enc_indicators = [
+        "android_db_encryption", "android_sql_cipher", "android_sql_cipher_aes256", 
+        "androidx.security.crypto", "androidx.datastore", "android.security.keystore", 
+        "java.security", "javax.crypto", "javax.crypto.spec"
+    ]
+    insecure_storage_rules = [
+        "android_hiddenui", "android_aes_ecb", "android_aws_ecb_default",
+        "android_rsa_no_oaep", "android_world_writable", "android_world_readable",
+        "android_world_read_write", "android_weak_ciphers", "cbc_padding_oracle",
+        "android_sql_raw_query", "android_read_write_external",
     ]
 
-    code_findings = report_data.get("code_analysis", {}).get("findings", {})
-    sbom = report_data.get("sbom", {})
-
-    sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
-
     search_corpus = [f.lower() for f in (list(code_findings.keys()) + sbom_versioned)]
-
+    
     encryption_detected = "No"
-
     for item in search_corpus:
-            if any(indicator in item for indicator in enc_indicators):
-                encryption_detected = "Yes"
-                break
+        if any(indicator in item for indicator in enc_indicators):
+            encryption_detected = "Yes"
+            break
 
-    insecure_storage = "Yes" if any(rule in code_findings for rule in insecure_storage) else "No"
+    insecure_storage = "Yes" if any(rule in code_findings for rule in insecure_storage_rules) else "No"
     
     return {"encryption_at_rest": encryption_detected, "insecure_data_storage_detected": insecure_storage}
 
-def _parseCertificatePinning(report_data: dict) -> dict:
-    '''Parses certificate pinning findings from MobSF report.'''
-    code_findings = report_data.get("code_analysis", {}).get("findings", {})
-    net_findings = report_data.get("network_security", {}).get("network_findings", [])
-
-    # Check for the explicit MobSF rule OR any pinning in the network config
+def _parseCertificatePinning(code_findings: dict, net_findings: list) -> dict:
+    """Parses certificate pinning findings from MobSF report."""
+        # Check for the explicit MobSF rule OR any pinning in the network config
     if "android_ssl_pinning" in code_findings:
         return {"cert_pinning_detected": "Yes"}
 
@@ -234,93 +217,76 @@ def _parseCertificatePinning(report_data: dict) -> dict:
     
     return {"cert_pinning_detected": "No"}
 
-def _parseWebviewRisks(report_data: dict) -> dict:
-    code_findings = report_data.get("code_analysis", {}).get("findings", {})
-    
-    # Check for any findings related to insecure WebView configurations
+def _parseWebviewRisks(code_findings: dict) -> dict:
+        # Check for any findings related to insecure WebView configurations
+
     insecure_webview = "Yes" if any(key.startswith("android_webview") for key in code_findings) else "No"
-    
     return {"webview_insecure_config_detected": insecure_webview}
 
-def _parseHealthFindings(report_data: dict) -> dict:
-    '''Parses health findings from MobSF report.'''
+def _parseHealthFindings(permissions: dict, sbom_packages: list) -> dict:
+    """Parses health findings from MobSF report."""
     health_permissions = {
         "android.permission.BODY_SENSORS", 
         "android.permission.BODY_SENSORS_BACKGROUND", 
         "android.permission.REQUEST_COMPANION_PROFILE_MEDICAL", 
-        "android.permission.FOREGROUND_SERVICE_HEALTH", 
-        "android.permission.ACTIVITY_RECOGNITION"
+        "android.permission.FOREGROUND_SERVICE_HEALTH"
     }
 
     health_packages = {
-        "android.health.connect", 
-        "android.health.connect.changelog", 
-        "android.health.connect.datatypes", 
-        "android.health.connect.datatypes.units", 
-        "androidx.health.connect.client",
-        "androidx.health.connect.client.aggregate", 
-        "androidx.health.connect.client.changes",
-        "androidx.health.connect.client.records",
-        "androidx.health.connect.client.request",
-        "androidx.health.connect.client.response",
-        "androidx.health.connect.client.time",
-        "androidx.health.connect.client.units",
-        "androidx.health.services.client",
-        "androidx.health.services.client.data",
-        "com.google.android.gms.fitness",
-        "com.google.android.gms.fitness.data",
-        "com.google.android.gms.fitness.request",
-        "com.google.android.gms.fitness.result",
+        "android.health.connect", "android.health.connect.changelog", 
+        "android.health.connect.datatypes", "android.health.connect.datatypes.units", 
+        "androidx.health.connect.client", "androidx.health.connect.client.aggregate", 
+        "androidx.health.connect.client.changes", "androidx.health.connect.client.records",
+        "androidx.health.connect.client.request", "androidx.health.connect.client.response",
+        "androidx.health.connect.client.time", "androidx.health.connect.client.units",
+        "androidx.health.services.client", "androidx.health.services.client.data",
+        "com.google.android.gms.fitness", "com.google.android.gms.fitness.data",
+        "com.google.android.gms.fitness.request", "com.google.android.gms.fitness.result",
         "com.google.android.gms.fitness.service"
     }
 
-    permissions = set(report_data.get("permissions", {}).keys())
-    sbom = report_data.get("sbom", {})
-    sbom_packages = sbom.get("sbom_packages", []) + [str(x) for x in sbom.get("sbom_versioned", [])]
-    search_corpus = [f.lower() for f in sbom_packages]
-
-    health_detected = "No"
-
     if any(perm in permissions for perm in health_permissions):
-        health_detected = "Yes"
-    else:
-        for item in search_corpus:
-            if any(pkg in item for pkg in health_packages):
-                health_detected = "Yes"
-                break
+        return {"health_related_findings": "Yes"}
 
-    return {"health_related_findings": health_detected}
+    search_corpus = [f.lower() for f in sbom_packages]
+    for item in search_corpus:
+        if any(pkg in item for pkg in health_packages):
+            return {"health_related_findings": "Yes"}
 
+    return {"health_related_findings": "No"}
 
 def mobsfParse(report_data: dict):
     """Parses MobSF JSON report and saves relevant findings to CSV."""
     if not report_data or "error" in report_data:
         return {"mobsf_status": "API Error"}
 
+    # Centralized Data Extraction
     permissions = report_data.get("permissions", {})
+    sbom = report_data.get("sbom", {})
+    sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
+    sbom_packages = sbom.get("sbom_packages", []) + sbom_versioned
+    
+    code_findings = report_data.get("code_analysis", {}).get("findings", {})
+    net_findings = report_data.get("network_security", {}).get("network_findings", [])
+    manifest_findings = report_data.get("manifest_analysis", {}).get("manifest_findings", [])
+    libraries = report_data.get("libraries", [])
+    secrets = report_data.get("secrets", [])
+
     dangerous_perms = [
         perm for perm, details in permissions.items()
         if details.get("status") == "dangerous"
     ]
-
-    sbom = report_data.get("sbom", {})
-    sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
-    libraries = report_data.get("libraries", [])
-    
     unique_sdks = set(sbom_versioned + libraries)
- 
-    secrets = report_data.get("secrets", [])
-
-    manifest_findings = report_data.get("manifest_analysis", {}).get("manifest_findings", [])
     cleartext_allowed = "Yes" if any(
         f.get("rule") == "clear_text_traffic" for f in manifest_findings
     ) else "No"
 
+    # Call modular helper functions with pre-extracted data dictionaries
     exported_data = _parseExportedComponents(manifest_findings)
-    storage_data = _parseEncryptionAndStorage(report_data)
-    pinning_data = _parseCertificatePinning(report_data)
-    webview_data = _parseWebviewRisks(report_data)
-    health_data = _parseHealthFindings(report_data)
+    storage_data = _parseEncryptionAndStorage(code_findings, sbom_versioned)
+    pinning_data = _parseCertificatePinning(code_findings, net_findings)
+    webview_data = _parseWebviewRisks(code_findings)
+    health_data = _parseHealthFindings(permissions, sbom_packages)
 
     results = {
         "num_dangerous_permissions": len(dangerous_perms),
@@ -339,4 +305,3 @@ def mobsfParse(report_data: dict):
     }
 
     return results
-
