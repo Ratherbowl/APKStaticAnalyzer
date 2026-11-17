@@ -1,0 +1,307 @@
+% ============================================================================
+% Aviation App Privacy - FlowDroid sources & sinks
+% ----------------------------------------------------------------------------
+% Purpose: find where personal data in aviation apps (airlines, flight trackers,
+% EFB/pilot tools, drone apps) is collected and where it goes - so it can be
+% compared against each app's privacy policy / Play Store Data Safety label.
+%
+% Built Nov 2026. Every Android/SDK signature below was checked against method
+% references found in the project's own APKs (20 apps), so they match how the
+% apps actually call these APIs.
+%
+% Format (FlowDroid):  <class: returnType method(paramTypes)> [permission] -> _SOURCE_ | _SINK_
+% Lines starting with % are comments.
+%
+% Category headers ("% @category SOURCE|SINK: NAME") are read by
+% flow_droid_script.py to label each leak in leaks.csv. FlowDroid ignores them.
+%
+% Deliberately LEFT OUT vs. FlowDroid's default file (they caused most of the noise):
+%   - Intent / Bundle getters & putters as sources/sinks (data passed between screens)
+%   - Locale.getCountry() etc. (not personal data)
+%   - SharedPreferences putInt / putBoolean (settings, not personal data)
+%   - Old server-side Java libraries (Spring, servlet, xmlrpc)
+% Optional extras are at the bottom, commented out.
+% ============================================================================
+
+% ############################################################################
+% SOURCES - where personal data comes from
+% ############################################################################
+
+% @category SOURCE: LOCATION_PRECISE
+<android.location.Location: double getLatitude()> -> _SOURCE_
+<android.location.Location: double getLongitude()> -> _SOURCE_
+<android.location.Location: double getAltitude()> -> _SOURCE_
+<android.location.Location: double getMslAltitudeMeters()> -> _SOURCE_
+<android.location.Location: float getSpeed()> -> _SOURCE_
+<android.location.Location: float getBearing()> -> _SOURCE_
+<android.location.Location: float getAccuracy()> -> _SOURCE_
+<android.location.LocationManager: android.location.Location getLastKnownLocation(java.lang.String)> android.permission.ACCESS_FINE_LOCATION -> _SOURCE_
+<com.google.android.gms.location.FusedLocationProviderClient: com.google.android.gms.tasks.Task getLastLocation()> android.permission.ACCESS_FINE_LOCATION -> _SOURCE_
+<com.google.android.gms.location.FusedLocationProviderClient: com.google.android.gms.tasks.Task getCurrentLocation(int,com.google.android.gms.tasks.CancellationToken)> android.permission.ACCESS_FINE_LOCATION -> _SOURCE_
+<com.google.android.gms.location.LocationResult: android.location.Location getLastLocation()> -> _SOURCE_
+<com.google.android.gms.location.LocationResult: java.util.List getLocations()> -> _SOURCE_
+<com.google.android.gms.maps.GoogleMap: android.location.Location getMyLocation()> -> _SOURCE_
+<android.location.Address: double getLatitude()> -> _SOURCE_
+<android.location.Address: double getLongitude()> -> _SOURCE_
+
+% @category SOURCE: LOCATION_APPROXIMATE
+<android.location.Geocoder: java.util.List getFromLocation(double,double,int)> -> _SOURCE_
+<android.location.Address: java.lang.String getLocality()> -> _SOURCE_
+<android.location.Address: java.lang.String getSubLocality()> -> _SOURCE_
+<android.location.Address: java.lang.String getAdminArea()> -> _SOURCE_
+<android.location.Address: java.lang.String getSubAdminArea()> -> _SOURCE_
+<android.location.Address: java.lang.String getPostalCode()> -> _SOURCE_
+<android.location.Address: java.lang.String getThoroughfare()> -> _SOURCE_
+<android.location.Address: java.lang.String getSubThoroughfare()> -> _SOURCE_
+<android.location.Address: java.lang.String getFeatureName()> -> _SOURCE_
+<android.location.Address: java.lang.String getAddressLine(int)> -> _SOURCE_
+<com.google.android.libraries.places.api.model.Place: com.google.android.gms.maps.model.LatLng getLatLng()> -> _SOURCE_
+<com.google.android.libraries.places.api.model.Place: java.lang.String getAddress()> -> _SOURCE_
+
+% @category SOURCE: DEVICE_ID
+<android.provider.Settings$Secure: java.lang.String getString(android.content.ContentResolver,java.lang.String)> -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getDeviceId()> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getDeviceId(int)> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getImei()> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getImei(int)> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getMeid()> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getSubscriberId()> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getSimSerialNumber()> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.os.Build: java.lang.String getSerial()> android.permission.READ_PHONE_STATE -> _SOURCE_
+<android.net.wifi.WifiInfo: java.lang.String getMacAddress()> -> _SOURCE_
+<android.bluetooth.BluetoothAdapter: java.lang.String getAddress()> -> _SOURCE_
+<android.bluetooth.BluetoothDevice: java.lang.String getAddress()> -> _SOURCE_
+<com.google.android.gms.ads.identifier.AdvertisingIdClient$Info: java.lang.String getId()> -> _SOURCE_
+<com.google.android.gms.ads.identifier.AdvertisingIdClient: com.google.android.gms.ads.identifier.AdvertisingIdClient$Info getAdvertisingIdInfo(android.content.Context)> -> _SOURCE_
+<com.google.android.gms.appset.AppSetIdInfo: java.lang.String getId()> -> _SOURCE_
+<com.google.firebase.installations.FirebaseInstallations: com.google.android.gms.tasks.Task getId()> -> _SOURCE_
+<com.google.firebase.messaging.FirebaseMessaging: com.google.android.gms.tasks.Task getToken()> -> _SOURCE_
+
+% @category SOURCE: PHONE_AND_NETWORK_INFO
+<android.telephony.TelephonyManager: java.lang.String getLine1Number()> android.permission.READ_PHONE_NUMBERS -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getSimOperator()> -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getSimOperatorName()> -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getNetworkOperator()> -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getNetworkOperatorName()> -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getSimCountryIso()> -> _SOURCE_
+<android.telephony.TelephonyManager: java.lang.String getNetworkCountryIso()> -> _SOURCE_
+<android.net.wifi.WifiInfo: java.lang.String getSSID()> -> _SOURCE_
+<android.net.wifi.WifiInfo: java.lang.String getBSSID()> -> _SOURCE_
+<android.net.wifi.WifiInfo: int getIpAddress()> -> _SOURCE_
+<android.bluetooth.BluetoothAdapter: java.lang.String getName()> -> _SOURCE_
+<android.bluetooth.BluetoothAdapter: java.util.Set getBondedDevices()> -> _SOURCE_
+<android.bluetooth.BluetoothDevice: java.lang.String getName()> -> _SOURCE_
+
+% @category SOURCE: ACCOUNT_AND_PERSONAL_INFO
+<android.accounts.AccountManager: android.accounts.Account[] getAccounts()> android.permission.GET_ACCOUNTS -> _SOURCE_
+<android.accounts.AccountManager: android.accounts.Account[] getAccountsByType(java.lang.String)> android.permission.GET_ACCOUNTS -> _SOURCE_
+<android.accounts.AccountManager: android.accounts.AccountManagerFuture getAuthToken(android.accounts.Account,java.lang.String,boolean,android.accounts.AccountManagerCallback,android.os.Handler)> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: java.lang.String getEmail()> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: java.lang.String getDisplayName()> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: java.lang.String getGivenName()> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: java.lang.String getFamilyName()> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: java.lang.String getId()> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: java.lang.String getIdToken()> -> _SOURCE_
+<com.google.android.gms.auth.api.signin.GoogleSignInAccount: android.net.Uri getPhotoUrl()> -> _SOURCE_
+<com.google.firebase.auth.FirebaseUser: java.lang.String getEmail()> -> _SOURCE_
+<com.google.firebase.auth.FirebaseUser: java.lang.String getPhoneNumber()> -> _SOURCE_
+<com.google.firebase.auth.FirebaseUser: java.lang.String getDisplayName()> -> _SOURCE_
+<com.google.firebase.auth.FirebaseUser: java.lang.String getUid()> -> _SOURCE_
+<com.google.firebase.auth.FirebaseUser: android.net.Uri getPhotoUrl()> -> _SOURCE_
+<com.google.firebase.auth.FirebaseUser: com.google.android.gms.tasks.Task getIdToken(boolean)> -> _SOURCE_
+
+% @category SOURCE: CONTACTS_AND_CONTENT
+% ContentResolver.query covers contacts, calendar, call log, SMS and photos -
+% check the URI in the source statement to see which one.
+<android.content.ContentResolver: android.database.Cursor query(android.net.Uri,java.lang.String[],java.lang.String,java.lang.String[],java.lang.String)> -> _SOURCE_
+<android.content.ContentResolver: android.database.Cursor query(android.net.Uri,java.lang.String[],java.lang.String,java.lang.String[],java.lang.String,android.os.CancellationSignal)> -> _SOURCE_
+<android.content.ContentResolver: android.database.Cursor query(android.net.Uri,java.lang.String[],android.os.Bundle,android.os.CancellationSignal)> -> _SOURCE_
+<android.content.ClipboardManager: android.content.ClipData getPrimaryClip()> -> _SOURCE_
+
+% @category SOURCE: AUDIO
+<android.media.AudioRecord: int read(byte[],int,int)> android.permission.RECORD_AUDIO -> _SOURCE_
+<android.media.AudioRecord: int read(short[],int,int)> android.permission.RECORD_AUDIO -> _SOURCE_
+<android.media.AudioRecord: int read(java.nio.ByteBuffer,int)> android.permission.RECORD_AUDIO -> _SOURCE_
+
+% @category SOURCE: INSTALLED_APPS
+<android.content.pm.PackageManager: java.util.List getInstalledApplications(int)> -> _SOURCE_
+<android.content.pm.PackageManager: java.util.List getInstalledPackages(int)> -> _SOURCE_
+
+
+% ############################################################################
+% SINKS - where data leaves the app (or gets stored)
+% ############################################################################
+
+% @category SINK: NETWORK
+% Plain Java / Android HTTP
+<java.net.URL: void <init>(java.lang.String)> -> _SINK_
+<java.net.URLConnection: void setRequestProperty(java.lang.String,java.lang.String)> -> _SINK_
+<java.net.URLConnection: void addRequestProperty(java.lang.String,java.lang.String)> -> _SINK_
+<java.net.HttpURLConnection: void setRequestProperty(java.lang.String,java.lang.String)> -> _SINK_
+<java.net.HttpURLConnection: void addRequestProperty(java.lang.String,java.lang.String)> -> _SINK_
+<javax.net.ssl.HttpsURLConnection: void setRequestProperty(java.lang.String,java.lang.String)> -> _SINK_
+<javax.net.ssl.HttpsURLConnection: void addRequestProperty(java.lang.String,java.lang.String)> -> _SINK_
+<java.io.OutputStream: void write(byte[])> -> _SINK_
+<java.io.OutputStream: void write(byte[],int,int)> -> _SINK_
+% OkHttp (used directly by most of these apps, and underneath Retrofit)
+<okhttp3.Request$Builder: okhttp3.Request$Builder url(java.lang.String)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder url(java.net.URL)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder url(okhttp3.HttpUrl)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder header(java.lang.String,java.lang.String)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder addHeader(java.lang.String,java.lang.String)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder post(okhttp3.RequestBody)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder put(okhttp3.RequestBody)> -> _SINK_
+<okhttp3.Request$Builder: okhttp3.Request$Builder patch(okhttp3.RequestBody)> -> _SINK_
+<okhttp3.RequestBody: okhttp3.RequestBody create(okhttp3.MediaType,java.lang.String)> -> _SINK_
+<okhttp3.RequestBody: okhttp3.RequestBody create(okhttp3.MediaType,byte[])> -> _SINK_
+<okhttp3.RequestBody: okhttp3.RequestBody create(okhttp3.MediaType,byte[],int,int)> -> _SINK_
+<okhttp3.RequestBody: okhttp3.RequestBody create(java.lang.String,okhttp3.MediaType)> -> _SINK_
+<okhttp3.RequestBody: okhttp3.RequestBody create(byte[],okhttp3.MediaType)> -> _SINK_
+<okhttp3.RequestBody: okhttp3.RequestBody create(byte[],okhttp3.MediaType,int,int)> -> _SINK_
+<okhttp3.FormBody$Builder: okhttp3.FormBody$Builder add(java.lang.String,java.lang.String)> -> _SINK_
+<okhttp3.HttpUrl$Builder: okhttp3.HttpUrl$Builder addQueryParameter(java.lang.String,java.lang.String)> -> _SINK_
+<okhttp3.HttpUrl$Builder: okhttp3.HttpUrl$Builder addEncodedQueryParameter(java.lang.String,java.lang.String)> -> _SINK_
+<okio.BufferedSink: okio.BufferedSink writeUtf8(java.lang.String)> -> _SINK_
+% Volley
+<com.android.volley.RequestQueue: com.android.volley.Request add(com.android.volley.Request)> -> _SINK_
+% Raw sockets
+<java.net.Socket: java.io.OutputStream getOutputStream()> -> _SINK_
+% WebView (data sent to a web page or a URL)
+<android.webkit.WebView: void loadUrl(java.lang.String)> -> _SINK_
+<android.webkit.WebView: void loadUrl(java.lang.String,java.util.Map)> -> _SINK_
+<android.webkit.WebView: void postUrl(java.lang.String,byte[])> -> _SINK_
+<android.webkit.WebView: void evaluateJavascript(java.lang.String,android.webkit.ValueCallback)> -> _SINK_
+<android.webkit.WebView: void loadDataWithBaseURL(java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String)> -> _SINK_
+% SMS
+<android.telephony.SmsManager: void sendTextMessage(java.lang.String,java.lang.String,java.lang.String,android.app.PendingIntent,android.app.PendingIntent)> android.permission.SEND_SMS -> _SINK_
+
+% @category SINK: THIRD_PARTY_ANALYTICS
+% Google / Firebase
+<com.google.firebase.analytics.FirebaseAnalytics: void logEvent(java.lang.String,android.os.Bundle)> -> _SINK_
+<com.google.firebase.analytics.FirebaseAnalytics: void setUserId(java.lang.String)> -> _SINK_
+<com.google.firebase.analytics.FirebaseAnalytics: void setUserProperty(java.lang.String,java.lang.String)> -> _SINK_
+<com.google.firebase.analytics.FirebaseAnalytics: void setDefaultEventParameters(android.os.Bundle)> -> _SINK_
+<com.google.firebase.analytics.FirebaseAnalytics: void setCurrentScreen(android.app.Activity,java.lang.String,java.lang.String)> -> _SINK_
+<com.google.android.gms.analytics.Tracker: void send(java.util.Map)> -> _SINK_
+<com.google.android.gms.analytics.Tracker: void set(java.lang.String,java.lang.String)> -> _SINK_
+<com.google.android.gms.analytics.Tracker: void setLocation(java.lang.String)> -> _SINK_
+<com.google.android.gms.analytics.Tracker: void setScreenName(java.lang.String)> -> _SINK_
+<com.google.firebase.database.DatabaseReference: com.google.android.gms.tasks.Task setValue(java.lang.Object)> -> _SINK_
+<com.google.firebase.database.DatabaseReference: com.google.android.gms.tasks.Task setValue(java.lang.Object,java.lang.Object)> -> _SINK_
+<com.google.firebase.perf.metrics.Trace: void putAttribute(java.lang.String,java.lang.String)> -> _SINK_
+% Facebook / Meta
+<com.facebook.appevents.AppEventsLogger: void logEvent(java.lang.String)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void logEvent(java.lang.String,android.os.Bundle)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void logEvent(java.lang.String,double)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void logEvent(java.lang.String,double,android.os.Bundle)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void logPurchase(java.math.BigDecimal,java.util.Currency,android.os.Bundle)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void setUserData(java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void setUserData(java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String)> -> _SINK_
+<com.facebook.appevents.AppEventsLogger: void setUserID(java.lang.String)> -> _SINK_
+% AppsFlyer
+<com.appsflyer.AppsFlyerLib: void logEvent(android.content.Context,java.lang.String,java.util.Map)> -> _SINK_
+<com.appsflyer.AppsFlyerLib: void logEvent(android.content.Context,java.lang.String,java.util.Map,com.appsflyer.attribution.AppsFlyerRequestListener)> -> _SINK_
+<com.appsflyer.AppsFlyerLib: void setCustomerUserId(java.lang.String)> -> _SINK_
+<com.appsflyer.AppsFlyerLib: void setCustomerIdAndLogSession(java.lang.String,android.content.Context)> -> _SINK_
+<com.appsflyer.AppsFlyerLib: void setAdditionalData(java.util.Map)> -> _SINK_
+% Adjust
+<com.adjust.sdk.Adjust: void trackEvent(com.adjust.sdk.AdjustEvent)> -> _SINK_
+<com.adjust.sdk.AdjustEvent: void addCallbackParameter(java.lang.String,java.lang.String)> -> _SINK_
+<com.adjust.sdk.AdjustEvent: void addPartnerParameter(java.lang.String,java.lang.String)> -> _SINK_
+% New Relic
+<com.newrelic.agent.android.NewRelic: boolean recordCustomEvent(java.lang.String,java.util.Map)> -> _SINK_
+<com.newrelic.agent.android.NewRelic: boolean recordCustomEvent(java.lang.String,java.lang.String,java.util.Map)> -> _SINK_
+<com.newrelic.agent.android.NewRelic: boolean setAttribute(java.lang.String,java.lang.String)> -> _SINK_
+<com.newrelic.agent.android.NewRelic: boolean setAttribute(java.lang.String,double)> -> _SINK_
+<com.newrelic.agent.android.NewRelic: boolean setUserId(java.lang.String)> -> _SINK_
+% Salesforce Marketing Cloud
+<com.salesforce.marketingcloud.sfmcsdk.SFMCSdk: void setIdentity(com.salesforce.marketingcloud.sfmcsdk.components.identity.Identity)> -> _SINK_
+<com.salesforce.marketingcloud.sfmcsdk.SFMCSdk: void track(com.salesforce.marketingcloud.sfmcsdk.components.events.Event[])> -> _SINK_
+<com.salesforce.marketingcloud.sfmcsdk.components.identity.AttributesEditor: void set(java.lang.String,java.lang.String)> -> _SINK_
+<com.salesforce.marketingcloud.sfmcsdk.components.identity.AttributesEditor: void set(java.util.Map)> -> _SINK_
+% OneSignal
+<com.onesignal.OneSignal: void login(java.lang.String)> -> _SINK_
+<com.onesignal.OneSignal: void login(java.lang.String,java.lang.String)> -> _SINK_
+<com.onesignal.user.IUserManager: void addTag(java.lang.String,java.lang.String)> -> _SINK_
+<com.onesignal.user.IUserManager: void addEmail(java.lang.String)> -> _SINK_
+<com.onesignal.user.IUserManager: void addSms(java.lang.String)> -> _SINK_
+% Quantum Metric (session replay)
+<com.quantummetric.instrument.QuantumMetric: void setUserIdentifier(java.lang.String)> -> _SINK_
+% Others common in travel apps (match only if the app ships them)
+<com.mixpanel.android.mpmetrics.MixpanelAPI: void track(java.lang.String,org.json.JSONObject)> -> _SINK_
+<com.mixpanel.android.mpmetrics.MixpanelAPI: void identify(java.lang.String)> -> _SINK_
+<com.amplitude.android.Amplitude: com.amplitude.core.Amplitude setUserId(java.lang.String)> -> _SINK_
+<com.braze.Braze: void changeUser(java.lang.String)> -> _SINK_
+<com.braze.Braze: void logCustomEvent(java.lang.String,com.braze.models.outgoing.BrazeProperties)> -> _SINK_
+<com.clevertap.android.sdk.CleverTapAPI: void pushEvent(java.lang.String,java.util.Map)> -> _SINK_
+<com.clevertap.android.sdk.CleverTapAPI: void onUserLogin(java.util.Map)> -> _SINK_
+<com.clevertap.android.sdk.CleverTapAPI: void pushProfile(java.util.Map)> -> _SINK_
+
+% @category SINK: CRASH_REPORTING
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void log(java.lang.String)> -> _SINK_
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void setUserId(java.lang.String)> -> _SINK_
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void setCustomKey(java.lang.String,java.lang.String)> -> _SINK_
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void setCustomKey(java.lang.String,double)> -> _SINK_
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void setCustomKey(java.lang.String,float)> -> _SINK_
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void setCustomKey(java.lang.String,long)> -> _SINK_
+<com.google.firebase.crashlytics.FirebaseCrashlytics: void recordException(java.lang.Throwable)> -> _SINK_
+<io.sentry.Sentry: io.sentry.protocol.SentryId captureMessage(java.lang.String)> -> _SINK_
+<io.sentry.Sentry: io.sentry.protocol.SentryId captureException(java.lang.Throwable)> -> _SINK_
+<io.sentry.Sentry: void setUser(io.sentry.protocol.User)> -> _SINK_
+<io.sentry.Sentry: void setTag(java.lang.String,java.lang.String)> -> _SINK_
+<io.sentry.Sentry: void setExtra(java.lang.String,java.lang.String)> -> _SINK_
+<io.sentry.Sentry: void addBreadcrumb(java.lang.String)> -> _SINK_
+<io.sentry.Sentry: void addBreadcrumb(io.sentry.Breadcrumb)> -> _SINK_
+
+% @category SINK: LOG
+<android.util.Log: int v(java.lang.String,java.lang.String)> -> _SINK_
+<android.util.Log: int v(java.lang.String,java.lang.String,java.lang.Throwable)> -> _SINK_
+<android.util.Log: int d(java.lang.String,java.lang.String)> -> _SINK_
+<android.util.Log: int d(java.lang.String,java.lang.String,java.lang.Throwable)> -> _SINK_
+<android.util.Log: int i(java.lang.String,java.lang.String)> -> _SINK_
+<android.util.Log: int i(java.lang.String,java.lang.String,java.lang.Throwable)> -> _SINK_
+<android.util.Log: int w(java.lang.String,java.lang.String)> -> _SINK_
+<android.util.Log: int w(java.lang.String,java.lang.String,java.lang.Throwable)> -> _SINK_
+<android.util.Log: int e(java.lang.String,java.lang.String)> -> _SINK_
+<android.util.Log: int e(java.lang.String,java.lang.String,java.lang.Throwable)> -> _SINK_
+<android.util.Log: int wtf(java.lang.String,java.lang.String)> -> _SINK_
+<android.util.Log: int println(int,java.lang.String,java.lang.String)> -> _SINK_
+<java.io.PrintStream: void println(java.lang.String)> -> _SINK_
+<java.util.logging.Logger: void info(java.lang.String)> -> _SINK_
+<java.util.logging.Logger: void warning(java.lang.String)> -> _SINK_
+
+% @category SINK: LOCAL_STORAGE
+<android.content.SharedPreferences$Editor: android.content.SharedPreferences$Editor putString(java.lang.String,java.lang.String)> -> _SINK_
+<android.content.SharedPreferences$Editor: android.content.SharedPreferences$Editor putStringSet(java.lang.String,java.util.Set)> -> _SINK_
+<android.content.SharedPreferences$Editor: android.content.SharedPreferences$Editor putLong(java.lang.String,long)> -> _SINK_
+<android.content.SharedPreferences$Editor: android.content.SharedPreferences$Editor putFloat(java.lang.String,float)> -> _SINK_
+<android.database.sqlite.SQLiteDatabase: long insert(java.lang.String,java.lang.String,android.content.ContentValues)> -> _SINK_
+<android.database.sqlite.SQLiteDatabase: long insertOrThrow(java.lang.String,java.lang.String,android.content.ContentValues)> -> _SINK_
+<android.database.sqlite.SQLiteDatabase: int update(java.lang.String,android.content.ContentValues,java.lang.String,java.lang.String[])> -> _SINK_
+<android.database.sqlite.SQLiteDatabase: void execSQL(java.lang.String)> -> _SINK_
+<android.database.sqlite.SQLiteDatabase: void execSQL(java.lang.String,java.lang.Object[])> -> _SINK_
+<java.io.FileOutputStream: void write(byte[])> -> _SINK_
+<java.io.FileOutputStream: void write(byte[],int,int)> -> _SINK_
+<java.io.Writer: void write(java.lang.String)> -> _SINK_
+
+% @category SINK: SHARED_WITH_OTHER_APPS
+<android.content.ContentResolver: android.net.Uri insert(android.net.Uri,android.content.ContentValues)> -> _SINK_
+<android.content.ContentResolver: int update(android.net.Uri,android.content.ContentValues,java.lang.String,java.lang.String[])> -> _SINK_
+<android.content.ClipboardManager: void setPrimaryClip(android.content.ClipData)> -> _SINK_
+
+
+% ##################################
+% OPTIONAL - remove the leading "% " 
+% ###################################
+% Inter-app messaging (Intents). Real leaks to other apps happen this way, but
+% these also flag every internal screen-to-screen hand-off, so expect noise.
+% @category SINK: INTER_APP_MESSAGE
+% <android.content.Context: void sendBroadcast(android.content.Intent)> -> _SINK_
+% <android.content.Context: void sendBroadcast(android.content.Intent,java.lang.String)> -> _SINK_
+% <android.app.Activity: void startActivity(android.content.Intent)> -> _SINK_
+% <android.app.Activity: void setResult(int,android.content.Intent)> -> _SINK_
+
+% Generic device info (model, OS version). Usually harmless; on for fingerprinting studies.
+% @category SOURCE: DEVICE_FINGERPRINT
+% <android.content.pm.PackageManager: android.content.pm.PackageInfo getPackageInfo(java.lang.String,int)> -> _SOURCE_
+% <android.telephony.TelephonyManager: int getNetworkType()> -> _SOURCE_
