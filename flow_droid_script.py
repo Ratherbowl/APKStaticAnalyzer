@@ -99,8 +99,9 @@ def run_one(apk: Path, out_dir: Path, timeout: int, retry_fast: bool) -> dict:
 
     # Fresh log/XML so leftovers from older runs don't skew the checks.
     log_file.write_text("", encoding="utf-8")
-    if out_xml.exists():
-        out_xml.unlink()
+
+    #Safer file deletion
+    out_xml.unlink(missing_ok=True)
 
     status = "error"
     used_fast = False
@@ -139,10 +140,16 @@ def run_one(apk: Path, out_dir: Path, timeout: int, retry_fast: bool) -> dict:
     }
 
 
+
+
 def check_log(log_file: Path) -> tuple[str, str]:
     """Return (status, notes) for a run that exited normally. "ok" requires a "Found N leaks" line."""
     text = log_file.read_text(encoding="utf-8", errors="ignore")
     notes = []
+
+    #helper function to make the return statement cleaner
+    def results_message(status: str, message: str = ""):
+        return status, "; ".join(notes + [message])
 
     m = re.search(r"Source lookup done, found (\d+) sources and (\d+) sinks", text)
     if m:
@@ -151,15 +158,17 @@ def check_log(log_file: Path) -> tuple[str, str]:
     if "Multiple dex files detected, only processing" in text:
         notes.append("only classes.dex analyzed - check WRAPPER_JAR")
     if "OutOfMemoryError" in text:  # checked before "failed": an OOM also logs a failure message
-        return "out_of_memory", "; ".join(notes + ["raise JAVA_HEAP or lower -j"])
+        return results_message("out_of_memory", "raise JAVA_HEAP or lower -j")
     if "The data flow analysis has failed" in text:
         m = re.search(r"The data flow analysis has failed\. Error message: (.*)", text)
-        return "error", "; ".join(notes + [m.group(1).strip()[:150] if m else "analysis failed"])  # trimmed for the CSV
+        #this one might throw an error, so keeping OG
+        #return "error", "; ".join(notes + [m.group(1).strip()[:150] if m else "analysis failed"])
+        return results_message("error", m.group(1).strip()[:150] if m else "analysis failed")  # trimmed for the CSV
     if "No sources found, aborting analysis" in text:
-        return "ok", "; ".join(notes + ["no sources reachable"])  # app never calls a listed source
+        return results_message("ok", "no sources reachable")# app never calls a listed source
     if not re.search(r"Found \d+ leaks", text):
-        return "incomplete", "; ".join(notes + ["no 'Found N leaks' line in log"])
-    return "ok", "; ".join(notes)
+        return results_message("incomplete", "no 'Found N leaks' line in log")
+    return results_message("ok")
 
 
 # ---- parsing results ----
@@ -253,7 +262,11 @@ def check_setup() -> None:
     if problems:
         sys.exit("Setup problem(s):\n  " + "\n  ".join(problems))
 
-
+def find_apks(args):
+    pattern = "**/*" if args.recursive else "*"
+    apks = sorted(p for p in args.apk_dir.glob(pattern) if p.is_file() and p.suffix.lower() == ".apk")  #lower(): some downloads end in .APK
+    return apks
+        
 def main() -> None:
     parser = argparse.ArgumentParser(description="Batch-run FlowDroid over a folder of APKs.")
     parser.add_argument("apk_dir", type=Path, help="Folder containing .apk files")
@@ -273,9 +286,9 @@ def main() -> None:
 
     check_setup()  # before creating any folders, so a bad path leaves nothing behind
 
-    pattern = "**/*" if args.recursive else "*"
-    apks = sorted(p for p in args.apk_dir.glob(pattern)
-                  if p.is_file() and p.suffix.lower() == ".apk")  #lower(): some downloads end in .APK
+    apks = find_apks(args)
+
+    #Following 3 lines could be moved to find_apks()
     if not apks:
         sys.exit(f"No APKs found in {args.apk_dir}")
     print(f"Found {len(apks)} APK(s). Running {args.jobs} at a time.\n") #when parsing parallel

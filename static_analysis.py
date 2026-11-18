@@ -29,24 +29,27 @@ def get_all_apks():
 def _extractDotEvidence(dot_file: Path | None) -> list[str]:
     """Helper to extract unique node values from an ADF mapping_model_*.dot file."""
     evidence_items = []
+    seen = set()
+    if not dot_file or not Path(dot_file).exists(): #switched to check if nonexistent first
+            return []
+    dot_content = Path(dot_file).read_text(encoding="utf-8", errors="replace")
 
-    if dot_file and Path(dot_file).exists():
-        dot_content = Path(dot_file).read_text(encoding="utf-8", errors="replace")
+    # Matches only quoted "prefix::value" nodes;
+    pattern = re.compile(r'"(adstr|nattr|lay|frag|act|img)::((?:\\.|[^"\\])*)"')
 
-        # Matches only quoted "prefix::value" nodes;
-        pattern = re.compile(r'"(adstr|nattr|lay|frag|act|img)::((?:\\.|[^"\\])*)"')
+    for prefix, value in pattern.findall(dot_content):
+        clean_val = (
+            value.replace(r'\"', '"')
+                    .replace(r'\/', '/')
+                    .replace(r'\&', '&')
+                    .replace(r'\\', '\\') 
+                    .strip()
+        )
 
-        for prefix, value in pattern.findall(dot_content):
-            clean_val = (
-                value.replace(r'\"', '"')
-                       .replace(r'\/', '/')
-                       .replace(r'\&', '&')
-                       .replace(r'\\', '\\')
-                       .strip()
-            )
-
-            if clean_val and clean_val not in evidence_items:
-                evidence_items.append(clean_val)
+        #Sets have O(1) Lookup time vs. List O(n)
+        if clean_val and clean_val not in seen:
+            evidence_items.append(clean_val)
+            seen.add(clean_val)
 
     return evidence_items
 
@@ -59,7 +62,7 @@ def adfScan(app_id: str, apk_file: Path) -> dict[str, Path | None]:
     }
 
     results = {"deletion": None, "health": None}
-    target_apk = Path(apk_file).resolve()
+    target_apk = apk_file.resolve() #got rid of the Path cast since already Path
     apk_stem = target_apk.stem
 
     try:
@@ -70,8 +73,9 @@ def adfScan(app_id: str, apk_file: Path) -> dict[str, Path | None]:
                 continue
 
             expected_dot = ADF_DIR / "output" / apk_stem / dot_filename
-            if expected_dot.exists():
-                expected_dot.unlink()  # Remove old .dot file to prevent data collision between runs
+
+            #Safer file deletion
+            expected_dot.unlink(missing_ok=True)  # Remove old .dot file to prevent data collision between runs
             
             subprocess.run(
                 ["bash", str(script_path), str(target_apk)],
@@ -109,7 +113,7 @@ def adfParse(deletion_dot: Path | None, health_dot: Path | None = None) -> dict:
     
 def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
     """Uploads, scans, and retrieves JSON report from MobSF REST API."""
-    print(f"[*] Submitting {Path(apk_file).name} to MobSF Docker...")
+    print(f"[*] Submitting {apk_file.name} to MobSF Docker...")
     try:
         with open (apk_file, "rb") as f:
             files = {"file": (f"{app_id}.apk", f, "application/vnd.android.package-archive")}
@@ -120,10 +124,16 @@ def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
             return None
 
         upload_data = upload_res.json()
-        scan_hash = upload_data.get("hash")
-        file_name = upload_data.get("file_name")
 
-        scan_payload = {"scan_type": "apk", "file_name": file_name, "hash": scan_hash}
+        #Added a small bit of error checking
+        if not upload_data.get("hash"):
+            print(f"[!] MobSF upload response missing hash: {upload_data}")
+            return None
+        if not upload_data.get("file_name"):
+            print(f"[!] MobSF upload response missing file_name: {upload_data}")
+            return None
+
+        scan_payload = {"scan_type": "apk", "file_name": upload_data.get("file_name"), "hash": upload_data.get("hash")}
         
         # 2. Trigger the scan. MobSF returns the FULL JSON report right here when it finishes.
         scan_res = requests.post(f"{MOBSF_URL}/api/v1/scan", headers=HEADERS, data=scan_payload, timeout=600)
