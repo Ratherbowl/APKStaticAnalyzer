@@ -19,7 +19,7 @@ FLOWDROID_JAR = Path.home() / "FlowDroid" / "soot-infoflow-cmd-jar-with-dependen
 ANDROID_JARS = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/AppData/Local/Android/Sdk/platforms")
 
 MOBSF_URL = "http://localhost:8000"
-MOBSF_API_KEY = "81cd67c1a301e2fe23f4c1fc59e51bde06d1beb0ea52ceb7e5766c8170fd90b7"
+MOBSF_API_KEY = os.getenv("MOBSF_API_KEY")
 HEADERS = {"Authorization": MOBSF_API_KEY}
 
 def get_all_apks():
@@ -30,9 +30,9 @@ def _extractDotEvidence(dot_file: Path | None) -> list[str]:
     """Helper to extract unique node values from an ADF mapping_model_*.dot file."""
     evidence_items = []
     seen = set()
-    if not dot_file or not Path(dot_file).exists(): #switched to check if nonexistent first
+    if not dot_file or not dot_file.exists(): #switched to check if nonexistent first
             return []
-    dot_content = Path(dot_file).read_text(encoding="utf-8", errors="replace")
+    dot_content = dot_file.read_text(encoding="utf-8", errors="replace")
 
     # Matches only quoted "prefix::value" nodes;
     pattern = re.compile(r'"(adstr|nattr|lay|frag|act|img)::((?:\\.|[^"\\])*)"')
@@ -111,59 +111,6 @@ def adfParse(deletion_dot: Path | None, health_dot: Path | None = None) -> dict:
         "adf_health_detected": "Yes" if health_evidence else "No",
     }
     
-def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
-    """Uploads, scans, and retrieves JSON report from MobSF REST API."""
-    print(f"[*] Submitting {apk_file.name} to MobSF Docker...")
-    try:
-        with open (apk_file, "rb") as f:
-            files = {"file": (f"{app_id}.apk", f, "application/vnd.android.package-archive")}
-            upload_res = requests.post(f"{MOBSF_URL}/api/v1/upload", headers=HEADERS, files=files, timeout=300)
-
-        if upload_res.status_code != 200:
-            print(f"[!] MobSF upload failed: {upload_res.text}")
-            return None
-
-        upload_data = upload_res.json()
-
-        #Added a small bit of error checking
-        if not upload_data.get("hash"):
-            print(f"[!] MobSF upload response missing hash: {upload_data}")
-            return None
-        if not upload_data.get("file_name"):
-            print(f"[!] MobSF upload response missing file_name: {upload_data}")
-            return None
-
-        scan_payload = {"scan_type": "apk", "file_name": upload_data.get("file_name"), "hash": upload_data.get("hash")}
-        
-        # 2. Trigger the scan. MobSF returns the FULL JSON report right here when it finishes.
-        scan_res = requests.post(f"{MOBSF_URL}/api/v1/scan", headers=HEADERS, data=scan_payload, timeout=600)
-        
-        if scan_res.status_code != 200:
-            print(f"[!] MobSF Scan Endpoint Failed (HTTP {scan_res.status_code}): {scan_res.text}")
-            return None
-
-        # 3. Grab the report directly from the scan response
-        report_data = scan_res.json()
-
-        # 4. Catch soft errors (where MobSF returns HTTP 200 but hands back an error JSON)
-        if "error" in report_data:
-            print(f"[!] MobSF API Error: {report_data['error']} | Payload sent: {scan_payload}")
-            return report_data
-
-        # 5. Save to file
-        static_scan_dir = output_dir / "static_scan"
-        static_scan_dir.mkdir(parents=True, exist_ok=True)
-        report_file = static_scan_dir / "mobsf_report.json"
-        
-        with open(report_file, "w", encoding="utf-8") as out:
-            json.dump(report_data, out, indent=4)
-
-        print(f"[*] Success! Report saved to {report_file}")
-        return report_data
-    except Exception as e:
-        print(f"[!] MobSF scan failed: {e}")
-        traceback.print_exc()
-        return None
 
 def _parseExportedComponents(manifest_findings: list) -> dict:
     """Parses exported components findings from MobSF report."""
@@ -180,31 +127,31 @@ def _parseExportedComponents(manifest_findings: list) -> dict:
             
     return {"exported_components_unprotected": "No"}
 
-def _parseEncryptionAndStorage(code_findings: dict, sbom_versioned: list) -> dict:
-    """Parses encryption and storage findings from MobSF report."""
+def _parseEncryption(code_findings: dict, sbom_versioned: list) -> dict:
+    """Parses encryption findings from MobSF report."""
     enc_indicators = [
         "android_db_encryption", "android_sql_cipher", "android_sql_cipher_aes256", 
         "androidx.security.crypto", "androidx.datastore", "android.security.keystore", 
         "java.security", "javax.crypto", "javax.crypto.spec"
     ]
+    search_corpus = [f.lower() for f in (list(code_findings.keys()) + sbom_versioned)]
+   
+    encryption_detected = "Yes" if any(indicator in item for item in search_corpus for indicator in enc_indicators) else "No"
+    return {"encryption_at_rest": encryption_detected}
+
+def _parseStorage(code_findings: dict) -> dict:
+    """Parses storage findings from MobSF report."""
     insecure_storage_rules = [
         "android_hiddenui", "android_aes_ecb", "android_aws_ecb_default",
         "android_rsa_no_oaep", "android_world_writable", "android_world_readable",
         "android_world_read_write", "android_weak_ciphers", "cbc_padding_oracle",
         "android_sql_raw_query", "android_read_write_external",
     ]
-
-    search_corpus = [f.lower() for f in (list(code_findings.keys()) + sbom_versioned)]
     
-    encryption_detected = "No"
-    for item in search_corpus:
-        if any(indicator in item for indicator in enc_indicators):
-            encryption_detected = "Yes"
-            break
-
     insecure_storage = "Yes" if any(rule in code_findings for rule in insecure_storage_rules) else "No"
     
-    return {"encryption_at_rest": encryption_detected, "insecure_data_storage_detected": insecure_storage}
+    return {"insecure_data_storage_detected": insecure_storage}
+
 
 def _parseCertificatePinning(code_findings: dict, net_findings: list) -> dict:
     """Parses certificate pinning findings from MobSF report."""
@@ -274,7 +221,7 @@ def mobsfParse(report_data: dict):
     permissions = report_data.get("permissions", {})
     sbom = report_data.get("sbom", {})
     sbom_versioned = [str(x) for x in sbom.get("sbom_versioned", [])]
-    sbom_packages = sbom.get("sbom_packages", []) + sbom_versioned
+    sbom_packages = list(sbom.get("sbom_packages", [])) + sbom_versioned
     
     code_findings = report_data.get("code_analysis", {}).get("findings", {})
     net_findings = report_data.get("network_security", {}).get("network_findings", [])
@@ -293,7 +240,8 @@ def mobsfParse(report_data: dict):
 
     # Call modular helper functions with pre-extracted data dictionaries
     exported_data = _parseExportedComponents(manifest_findings)
-    storage_data = _parseEncryptionAndStorage(code_findings, sbom_versioned)
+    encryption_data = _parseEncryption(code_findings, sbom_versioned)
+    storage_data = _parseStorage(code_findings, sbom_versioned)
     pinning_data = _parseCertificatePinning(code_findings, net_findings)
     webview_data = _parseWebviewRisks(code_findings)
     health_data = _parseHealthFindings(permissions, sbom_packages)
@@ -307,7 +255,7 @@ def mobsfParse(report_data: dict):
         "cleartext_traffic_allowed": cleartext_allowed,
         "exported_components_unprotected": exported_data.get("exported_components_unprotected", "No"),
         "insecure_data_storage_detected": storage_data.get("insecure_data_storage_detected", "No"),
-        "encryption_at_rest": storage_data.get("encryption_at_rest", "No"),
+        "encryption_at_rest": encryption_data.get("encryption_at_rest", "No"),
         "webview_insecure_config_detected": webview_data.get("webview_insecure_config_detected", "No"),
         "health_related_findings": health_data.get("health_related_findings", "No"),
         "cert_pinning": pinning_data.get("cert_pinning_detected", "No"),
@@ -315,3 +263,57 @@ def mobsfParse(report_data: dict):
     }
 
     return results
+
+def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
+    """Uploads, scans, and retrieves JSON report from MobSF REST API."""
+    print(f"[*] Submitting {apk_file.name} to MobSF Docker...")
+    try:
+        with open (apk_file, "rb") as f:
+            files = {"file": (f"{app_id}.apk", f, "application/vnd.android.package-archive")}
+            upload_res = requests.post(f"{MOBSF_URL}/api/v1/upload", headers=HEADERS, files=files, timeout=300)
+
+        if upload_res.status_code != 200:
+            print(f"[!] MobSF upload failed: {upload_res.text}")
+            return None
+
+        upload_data = upload_res.json()
+
+        #Added a small bit of error checking
+        if not upload_data.get("hash"):
+            print(f"[!] MobSF upload response missing hash: {upload_data}")
+            return None
+        if not upload_data.get("file_name"):
+            print(f"[!] MobSF upload response missing file_name: {upload_data}")
+            return None
+
+        scan_payload = {"scan_type": "apk", "file_name": upload_data.get("file_name"), "hash": upload_data.get("hash")}
+        
+        # 2. Trigger the scan. MobSF returns the FULL JSON report right here when it finishes.
+        scan_res = requests.post(f"{MOBSF_URL}/api/v1/scan", headers=HEADERS, data=scan_payload, timeout=600)
+        
+        if scan_res.status_code != 200:
+            print(f"[!] MobSF Scan Endpoint Failed (HTTP {scan_res.status_code}): {scan_res.text}")
+            return None
+
+        # 3. Grab the report directly from the scan response
+        report_data = scan_res.json()
+
+        # 4. Catch soft errors (where MobSF returns HTTP 200 but hands back an error JSON)
+        if "error" in report_data:
+            print(f"[!] MobSF API Error: {report_data['error']} | Payload sent: {scan_payload}")
+            return report_data
+
+        # 5. Save to file
+        static_scan_dir = output_dir / "static_scan"
+        static_scan_dir.mkdir(parents=True, exist_ok=True)
+        report_file = static_scan_dir / "mobsf_report.json"
+        
+        with open(report_file, "w", encoding="utf-8") as out:
+            json.dump(report_data, out, indent=4)
+
+        print(f"[*] Success! Report saved to {report_file}")
+        return report_data
+    except Exception as e:
+        print(f"[!] MobSF scan failed: {e}")
+        traceback.print_exc()
+        return None
