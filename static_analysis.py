@@ -1,20 +1,16 @@
-import os
-import glob
-import fnmatch
 import json
 import csv
 import subprocess
 import requests
-import zipfile
-import shutil
-import datetime
 import traceback
 from pathlib import Path
 import re
 
-APK_INPUT_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/APKs/")
-ARTIFACTS_DIR = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/Downloads/Test APK/Output/")
-ADF_DIR = Path(__file__).resolve().parent.parent / "AccountDeletionAnalyzer_Ubuntu"
+PROJECT_DIR = Path(__file__).resolve().parent
+
+APK_INPUT_DIR = PROJECT_DIR / "apks"
+ARTIFACTS_DIR = PROJECT_DIR / "artifacts"
+ADF_DIR = PROJECT_DIR / "AccountDeletionAnalyzer_Ubuntu"
 FLOWDROID_JAR = Path.home() / "FlowDroid" / "soot-infoflow-cmd-jar-with-dependencies.jar"
 ANDROID_JARS = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/AppData/Local/Android/Sdk/platforms")
 
@@ -315,3 +311,9 @@ def mobsfParse(report_data: dict):
     }
 
     return results
+
+
+#Outline for main function
+'''
+1. 
+'''
