@@ -1,3 +1,0 @@
-<java.net.URL: void <init>(java.lang.String)> -> _SINK_
-<android.location.Location: double getLatitude()> -> _SOURCE_
-<android.location.Location: double getLongitude()> -> _SOURCE_

@@ -61,9 +61,8 @@ docker run -it -p 8000:8000 opensecurity/mobile-security-framework-mobsf:latest
 This project relies on the `AccountDeletionAnalyzer` toolset (distributed separately from this repository).
 
 * The `AccountDeletionAnalyzer_Ubuntu/` folder resides **directly inside** the `APKStaticAnalyzer/` repository root.
-* Cloning this repository automatically creates `AccountDeletionAnalyzer_Ubuntu/` containing only the two tracked custom scripts (`adf_delete.sh` and `adf_health.sh`).
-* **Important:** Copy the separately distributed `AccountDeletionAnalyzer` files (such as `toplevel.sh` and the `pyStatParser/` directory) **into** `APKStaticAnalyzer/AccountDeletionAnalyzer_Ubuntu/`, merging them alongside `adf_delete.sh` and `adf_health.sh` without overwriting or deleting the two tracked scripts.
-* Because `.gitignore` ignores everything inside `AccountDeletionAnalyzer_Ubuntu/` except the two custom scripts, the third-party tool files and any generated `output/` scan artifacts will remain untracked by Git.
+* **Important:** Copy the separately distributed `AccountDeletionAnalyzer` folder **into** `APKStaticAnalyzer/AccountDeletionAnalyzer_Ubuntu/`, and add in `adf_delete.sh` and `adf_health.sh` from this repository.
+* Because `.gitignore` ignores everything inside `AccountDeletionAnalyzer_Ubuntu/`, the third-party tool files and any generated `output/` scan artifacts will remain untracked by Git.
 
 ## Directory Structure
 
@@ -93,9 +92,6 @@ To ensure the separately distributed tool files and decompiled APK outputs are n
 # Ignore the separately distributed AccountDeletionAnalyzer toolset and its outputs
 AccountDeletionAnalyzer_Ubuntu/*
 
-# Keep custom project ADF scripts tracked in version control
-!AccountDeletionAnalyzer_Ubuntu/adf_delete.sh
-!AccountDeletionAnalyzer_Ubuntu/adf_health.sh
 ```
 
 ## Configuration (Required Before Running)

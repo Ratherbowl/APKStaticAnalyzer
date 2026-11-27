@@ -1,10 +1,13 @@
 import json
 import csv
+import os
 import subprocess
 import requests
 import traceback
 from pathlib import Path
 import re
+from collections import Counter
+import flow_droid_script as fd
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -314,7 +317,142 @@ def mobsfScan(app_id:str, apk_file: Path, output_dir: Path):
         traceback.print_exc()
         return None
 
+CSV_HEADERS = [
+    "app_id",
+    "tool_used",
+    "scan_date",
+    "num_dangerous_permissions",
+    "dangerous_permissions_list",
+    "hardcoded_secret_found",
+    "num_hardcoded_secrets",
+    "num_3rd_party_sdks",
+    "sdk_list",
+    "cert_pinning_present",
+    "encryption_at_rest_detected",
+    "delete_account_class_found",
+    "delete_account_string_evidence",
+    "sensitive_dataflow_count",
+    "sensitive_dataflow_examples",
+    "raw_tool_output_path",
+    "compliance_findings_mapped",
+    "run_by",
+    "notes",
+    "cleartext_traffic_allowed",
+    "insecure_data_storage_detected",
+    "exported_components_unprotected",
+    "webview_insecure_config_detected",
+    "health_related_permission_or_sdk_detected",
+    "mobsf_status",
+    "adf_status",
+    "flowdroid_status",
+]
+
+def _summarizeLeaks(leaks: list[dict], max_examples: int = 10) -> str:
+    """Condense FlowDroid leak dicts into a concise CSV string like ''LOCATION -> NETWORK (3x)'."""
+    if not leaks:
+        return "None"
+
+    pair_counts = Counter(
+        (leak.get("source_category", "UNCATEGORIZED"), leak.get("sink_category", "UNCATEGORIZED"))
+        for leak in leaks)
+
+    top_pairs = pair_counts.most_common(max_examples)
+    summary= "; ".join(f"{src} -> {snk} ({cnt}x)" for (src, snk), cnt in top_pairs)
+
+    remaining = len(pair_counts) - len(top_pairs)
+
+    if remaining > 0:
+        summary += f"; (+{remaining} more category pairs)"
+
+    return summary
+
+def _isRowComplete(row: dict) -> bool:
+    """Returns True only if MobSF, ADF, and FlowDroid all finished cleanly for this app."""
+    return (
+        row.get("mobsf_status") == "Success"
+        and row.get("adf_status") == "Success"
+        and str(row.get("flowdroid_status", "")).startswith("ok")
+    )
+
+def _prepareMasterCsv(csv_path: Path, fieldnames: list[str]) -> set[str]:
+    """
+    Loads an existing master CSV, keeps only cleanly completed apps (rewriting
+    atomically so failed apps are removed before being re-run), and returns the
+    set of completed app_ids to skip.
+    """
+
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=fieldnames).writeheader()
+        return set()
+
+    good_rows: dict[str, dict] = {}
+    requeue_count = 0
+
+    with open(csv_path, "r", newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            app_id = row.get("app_id", "").strip()
+            if not app_id:
+                continue
+            if _isRowComplete(row):
+                good_rows[app_id] = row
+            else:
+                requeue_count += 1
+
+    tmp_path = csv_path.with_suffix(".tmp")
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(good_rows.values())
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, csv_path)
+
+    print(f"[*] Resume check: {len(good_rows)} complete (skipping), {requeue_count} failed (re-running).")
+    return set(good_rows.keys())
+
+def main(flowdroid_timeout: int = 1800, retry_fast: bool = True, run_by: str = "") -> None:
+    """Orchestrates MobSF, ADF (deletion + health), and FlowDroid into one master CSV."""
+    # Sync FlowDroid module paths with this script's constants and validate
+    fd.FLOWDROID_JAR = FLOWDROID_JAR
+    fd.ANDROID_PLATFORMS = ANDROID_JARS
+    fd.check_setup()
+
+    ## Ensure base output and FlowDroid subdirectories exist (fd.run_one expects xml/ and logs/)
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    flowdroid_dir = ARTIFACTS_DIR / "flowdroid"
+    (flowdroid_dir / "xml").mkdir(parents=True, exist_ok=True)
+    (flowdroid_dir / "logs").mkdir(parents=True, exist_ok=True)
+
+    # Discover APKs and filter out already succeeded apps
+    all_apks = sorted(get_all_apks(), key=lambda p: p.stem.lower())
+    if not all_apks:
+        print(f"[!] No APKs found in {APK_INPUT_DIR}")
+        return
+
+    master_csv = ARTIFACTS_DIR / "static_findings.csv"
+
+    completed_ids = _prepareMasterCsv(master_csv, CSV_HEADERS)
+    pending_apks = [apk for apk in all_apks if apk.stem not in completed_ids]
+
+    print(f"[*] Total APKs: {len(all_apks)} | Remaining to run: {len(pending_apks)}")
+    if not pending_apks:
+        print(f"[*] All APKs already completed cleanly. Master CSV: {master_csv}")
+        return
+
+    # Run pipeline app-by-app, appending and flushing after 
 #Outline for main function
 '''
-1. 
+1. Check for existing master csv. If it exists, filter out already completed apps (separate helper function?)
+2. If not, define master csv (to be copied into primary excel sheet)
+3. Define csv headers (from Excel sheet)
+4. Open master csv in append/write mode and add headers and flush
+5. Loop through all APKs
+    - Collect app_id from APK filename
+    - Create output directory for this app (adf uses separate output folder from MobSF)
+    - Run MobSF scan and parse results
+    - Run ADF scans and parse results
+    - Merge Health Results from MobSF and ADF into one column
+    - Run FlowDroid analysis and parse results
+    - Commit and flush all results to master csv
 '''

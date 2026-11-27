@@ -40,22 +40,22 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
-FLOWDROID_JAR = Path.home() / "tools/flowdroid/soot-infoflow-cmd-jar-with-dependencies.jar"
+FLOWDROID_JAR = PROJECT_DIR / "tools/flowdroid/soot-infoflow-cmd-2.13.0-jar-with-dependencies.jar"
 
 # Multi-dex + lenient resource parsing. Without it most apps report
 # "No sources found" or crash with "res1 is not zero".
-WRAPPER_JAR = PROJECT_DIR / "tools/flowdroid-multidex.jar"
+WRAPPER_JAR = PROJECT_DIR / "tools/flowdroid/flowdroid-multidex.jar"
 WRAPPER_MAIN = "FlowDroidMultiDex"  # its main class; launched via -cp, not -jar, so the wrapper runs first
 
 # Android SDK "platforms" folder (path differs per operating system).
-ANDROID_PLATFORMS = Path.home() / "Library/Android/sdk/platforms"
+ANDROID_PLATFORMS = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/AppData/Local/Android/Sdk/platforms")
 
 # Project sources/sinks list; its "% @category" headers label leaks in leaks.csv.
 # FlowDroid's original default list: ~/tools/flowdroid/SourcesAndSinks.txt
 SOURCES_SINKS = PROJECT_DIR / "aviation_sources_sinks.txt"
 
 # Library summaries so taint flows through e.g. StringBuilder. None to skip.
-TAINT_WRAPPER = Path.home() / "tools/flowdroid/EasyTaintWrapperSource.txt"
+TAINT_WRAPPER = PROJECT_DIR / "tools/flowdroid/EasyTaintWrapperSource.txt"
 
 # Heap per run. (heap size) x (parallel jobs) must fit in RAM.
 JAVA_HEAP = "8g"  # big apps need 4-8g; less tends to end in OutOfMemoryError
