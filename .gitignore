@@ -1,3 +1,4 @@
-*.json
 AccountDeletionAnalyzer/*
 AccountDeletionAnalyzer_Ubuntu/*
+results/*
+test/*
