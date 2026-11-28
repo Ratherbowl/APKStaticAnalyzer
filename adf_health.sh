@@ -12,20 +12,20 @@ TIMEOUT_CMD="${TIMEOUT_CMD:-gtimeout}"
 if ! command -v "$TIMEOUT_CMD" >/dev/null 2>&1; then
     TIMEOUT_CMD=timeout
 fi
-apkpath=$1
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+apkpath="$1"
 apkfile=$(basename -- "$apkpath")
 apkdir="${apkfile%.*}"
-outdir=output
-
+outdir="output"
 patterns=".*upload.*document.*|.*upload.*certificate.*|.*upload.*covid.*|.*upload.*health.*|.*validate.*document.*|.*validate.*certificate.*|.*validate.*health.*|.*verify.*document.*|.*verify.*certificate.*|.*verify.*status.*|.*verify.*health.*|.*submit.*document.*|.*submit.*certificate.*|.*submit.*covid.*|.*submit.*test.*|.*add.*document.*|.*add.*certificate.*|.*add.*record.*|.*add.*test.*|.*provide.*document.*|.*provide.*certificate.*|.*provide.*covid.*|.*provide.*record.*|.*provide.*test.*"
-
-model=$outdir/$apkdir/mapping_model_health.dot
+model="$outdir/$apkdir/mapping_model_health.dot"
 
 TIMELIMIT=45
 
-# EDIT THIS if your local paths differ:
-SEMANTICS="/home/darcole/AAR/AccountDeletionAnalyzer_Ubuntu/pyStatParser/pyStatParser/semantics.py"
-TOPLEVEL_SH="$(cd "$(dirname "$0")" && pwd)/toplevel.sh"
+SEMANTICS="$SCRIPT_DIR/pyStatParser/pyStatParser/semantics.py"
+TOPLEVEL_SH="$SCRIPT_DIR/toplevel.sh"
 
 ere_quote() {
     sed 's/[]\.|$(){}?+*^]/\\&/g' <<< "$*"
@@ -39,49 +39,56 @@ dot_escape() {
     sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's|[\\&/]|\\&|g' <<< "$*"
 }
 
-[ ! -d $outdir ] && mkdir -p $outdir
+mkdir -p "$outdir"
 
 # Decompile apk file
-[ ! -d "$outdir/$apkdir" ] && apktool d $apkpath -o $outdir/$apkdir
+if [ ! -d "$outdir/$apkdir" ]; then
+    apktool d "$apkpath" -o "$outdir/$apkdir" || {
+        echo "apktool failed for $apkpath" >&2
+        exit 1
+    }
+fi
 
 # Convert images to text only the first time
 if [ ! -f "$outdir/$apkdir/ocr_complete.flag" ]; then
-    find $outdir/$apkdir -type f -exec file {} \; | awk -F: '{if ($2 ~/image/) print $1}' | while IFS= read -r img; do
+    find "$outdir/$apkdir" -type f -exec file {} + | awk -F: '{if ($2 ~/image/) print $1}' | while IFS= read -r img; do
         tesseract "$img" "${img%.*}.txt"
     done
     touch "$outdir/$apkdir/ocr_complete.flag"
 fi
 
 # Find and validate AD strings
-[ ! -z "$patterns" ] && while IFS='|' read -ra pats ; do
-    for p in "${pats[@]}"; do
-        valid=""
-        while IFS= read -r line; do
-            if "$TIMEOUT_CMD" $TIMELIMIT python3 "$SEMANTICS" "$line" "$p" 2>/dev/null | "$GREP" -q 'TP'; then
-                valid+="$line"$'\n'
-            fi
-        done < <("$GREP" --color=never -Pio "(?<=>)$p(?=<)" $outdir/$apkdir/res/values/strings.xml)
+if [ -n "$patterns" ] && [ -f "$outdir/$apkdir/res/values/strings.xml" ]; then
+    while IFS='|' read -ra pats ; do
+        for p in "${pats[@]}"; do
+            valid=""
+            while IFS= read -r line; do
+                if "$TIMEOUT_CMD" "$TIMELIMIT" python3 "$SEMANTICS" "$line" "$p" 2>/dev/null | "$GREP" -q 'TP'; then
+                    valid+="$line"$'\n'
+                fi
+            done < <("$GREP" --color=never -Pio "(?<=>)$p(?=<)" "$outdir/$apkdir/res/values/strings.xml" | sort -u)
 
-        if [ ! -z "$valid" ]; then
-            adstr+=$'\n'
-            adstr+="$valid"
-            adstr+=$'\n'
-        fi
-    done
-done <<< "$patterns"
+            if [ -n "$valid" ]; then
+                adstr+=$'\n'
+                adstr+="$valid"
+                adstr+=$'\n'
+            fi
+        done
+    done <<< "$patterns"
+fi
 adstr=$(awk 'NF && !seen[$0]++' <<<"$adstr")  # Remove blank lines and duplicated lines
 
 #### Build a mapping model ####
->$model
-echo 'digraph G {' >> $model    # start dot graph
+>"$model"
+echo 'digraph G {' >> "$model"    # start dot graph
 
 # { AD strings -> name attributes }
-[ ! -z "$adstr" ] && while IFS= read -r ads ; do
+[ -n "$adstr" ] && [ -f "$outdir/$apkdir/res/values/strings.xml" ] && while IFS= read -r ads ; do
     adsq=$(ere_quote "$ads")
     adsd=$(dot_escape "$ads")
-    attr=$("$GREP" --color=never -Po "(?<=name=\").*(?=\">$adsq<)" $outdir/$apkdir/res/values/strings.xml)
-    if [ ! -z "$attr" ]; then
-        echo "$attr" | sed "s/^/\"adstr::$adsd\" -> \"nattr::/g" | sed "s/$/\"/g" >> $model
+    attr=$("$GREP" --color=never -Po "(?<=name=\").*(?=\">$adsq<)" "$outdir/$apkdir/res/values/strings.xml")
+    if [ -n "$attr" ]; then
+        echo "$attr" | sed "s/^/\"adstr::$adsd\" -> \"nattr::/g" | sed "s/$/\"/g" >> "$model"
         nameattrs+=$'\n'
         nameattrs+="$attr"
         nameattrs+=$'\n'
@@ -90,12 +97,12 @@ done <<< "$adstr"
 nameattrs=$(awk 'NF && !seen[$0]++' <<<"$nameattrs")
 
 # { AD strings -> layouts }
-[ ! -z "$adstr" ] && while IFS= read -r ads ; do
+[ -n "$adstr" ] && [ -d "$outdir/$apkdir/res/layout" ] && while IFS= read -r ads ; do
     adsq=$(ere_quote "$ads")
     adsd=$(dot_escape "$ads")
-    lays=$(find $outdir/$apkdir/res/layout/ -type f -exec "$GREP" -l "$adsq" {} \; | xargs -L 1 -r basename)
-    if [ ! -z "$lays" ]; then
-        echo "$lays" | sed "s/^/\"adstr::$adsd\" -> \"lay::/g" | sed "s/$/\"/g" >> $model
+    lays=$(find "$outdir/$apkdir/res/layout/" -type f -exec "$GREP" -l -e "$adsq" {} + | while IFS= read -r f; do basename -- "$f"; done)
+    if [ -n "$lays" ]; then
+        echo "$lays" | sed "s/^/\"adstr::$adsd\" -> \"lay::/g" | sed "s/$/\"/g" >> "$model"
         layouts+=$'\n'
         layouts+="$lays"
         layouts+=$'\n'
@@ -104,22 +111,26 @@ done <<< "$adstr"
 layouts=$(awk 'NF && !seen[$0]++' <<<"$layouts")
 
 # { AD strings -> images }
-[ ! -z "$adstr" ] && while IFS= read -r ads ; do
+[ -n "$adstr" ] && while IFS= read -r ads ; do
     adsq=$(ere_quote "$ads")
     adsd=$(dot_escape "$ads")
-    imgs=$(find $outdir/$apkdir/res/ -type f -name "*.txt" ! -name "*.txt.txt" -exec "$GREP" -l "$adsq" {} \; | xargs -L 1 -r basename)
-    if [ ! -z "$imgs" ]; then
-        echo "$imgs" | sed "s/^/\"adstr::$adsd\" -> \"img::/g" | sed "s/$/\"/g" >> $model
-        images+=$'\n'
-        images+="$imgs"
-        images+=$'\n'
+    if [ -d "$outdir/$apkdir/res" ]; then
+        imgs=$(find "$outdir/$apkdir/res/" -type f -name "*.txt" ! -name "*.txt.txt" -exec "$GREP" -l -e "$adsq" {} + | while IFS= read -r f; do basename -- "$f"; done)
+        if [ -n "$imgs" ]; then
+            echo "$imgs" | sed "s/^/\"adstr::$adsd\" -> \"img::/g" | sed "s/$/\"/g" >> "$model"
+            images+=$'\n'
+            images+="$imgs"
+            images+=$'\n'
+        fi
     fi
-    imgs=$(find $outdir/$apkdir/assets/ -type f -name "*.txt" ! -name "*.txt.txt" -exec "$GREP" -l "$adsq" {} \; | xargs -L 1 -r basename)
-    if [ ! -z "$imgs" ]; then
-        echo "$imgs" | sed "s/^/\"adstr::$adsd\" -> \"img::/g" | sed "s/$/\"/g" >> $model
-        images+=$'\n'
-        images+="$imgs"
-        images+=$'\n'
+    if [ -d "$outdir/$apkdir/assets" ]; then
+        imgs=$(find "$outdir/$apkdir/assets/" -type f -name "*.txt" ! -name "*.txt.txt" -exec "$GREP" -l -e "$adsq" {} + | while IFS= read -r f; do basename -- "$f"; done)
+        if [ -n "$imgs" ]; then
+            echo "$imgs" | sed "s/^/\"adstr::$adsd\" -> \"img::/g" | sed "s/$/\"/g" >> "$model"
+            images+=$'\n'
+            images+="$imgs"
+            images+=$'\n'
+        fi
     fi
 done <<< "$adstr"
 images=$(awk 'NF && !seen[$0]++' <<<"$images")
@@ -128,10 +139,10 @@ images=$(awk 'NF && !seen[$0]++' <<<"$images")
 # Todo
 
 # { name Attributes -> layouts }
-[ ! -z "$nameattrs" ] && while IFS= read -r att ; do
-    lays=$(find $outdir/$apkdir/res/layout/ -type f -name "*.xml" -exec "$GREP" -l "@string/$att" {} \; | xargs -L 1 -r basename)
-    if [ ! -z "$lays" ]; then
-        echo "$lays" | sed "s/^/\"nattr::$att\" -> \"lay::/g" | sed "s/$/\"/g" >> $model
+[ -n "$nameattrs" ] && [ -d "$outdir/$apkdir/res/layout" ] && while IFS= read -r att ; do
+    lays=$(find "$outdir/$apkdir/res/layout/" -type f -name "*.xml" -exec "$GREP" -l "@string/$att" {} + | while IFS= read -r f; do basename -- "$f"; done)
+    if [ -n "$lays" ]; then
+        echo "$lays" | sed "s/^/\"nattr::$att\" -> \"lay::/g" | sed "s/$/\"/g" >> "$model"
         layouts+=$'\n'
         layouts+="$lays"
         layouts+=$'\n'
@@ -144,11 +155,11 @@ layouts=$(awk 'NF && !seen[$0]++' <<<"$layouts")
 # numeric resource id from public.xml, since compiled code references
 # resources by field name, not by the raw hex constant (that constant only
 # appears literally in the R$string.smali definition file itself).
-[ ! -z "$nameattrs" ] && while IFS= read -r att ; do
-    frags=$(find $outdir/$apkdir/ -type f -name "*.smali" -exec "$GREP" --color=never -lE "R\\\$string;->${att}:I" {} \; \
-        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" && basename "$f"; done)
-    if [ ! -z "$frags" ]; then
-        echo "$frags" | sed "s/^/\"nattr::$att\" -> \"frag::/g" | sed "s/$/\"/g" >> $model
+[ -n "$nameattrs" ] && while IFS= read -r att ; do
+    frags=$(find "$outdir/$apkdir/" -type f -name "*.smali" -exec "$GREP" --color=never -lE "R\\\$string;->${att}:I" {} + \
+        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" && basename -- "$f"; done)
+    if [ -n "$frags" ]; then
+        echo "$frags" | sed "s/^/\"nattr::$att\" -> \"frag::/g" | sed "s/$/\"/g" >> "$model"
         fragments+=$'\n'
         fragments+="$frags"
         fragments+=$'\n'
@@ -157,20 +168,20 @@ done <<< "$nameattrs"
 fragments=$(awk 'NF && !seen[$0]++' <<<"$fragments")
 
 # { name Attributes -> activities }
-[ ! -z "$nameattrs" ] && while IFS= read -r att ; do
-    acts=$(find $outdir/$apkdir/ -type f -name "*.smali" ! -name "R*.smali" -exec "$GREP" --color=never -lE "R\\\$string;->${att}:I" {} \; \
-        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" || basename "$f"; done)
-    if [ ! -z "$acts" ]; then
-        echo "$acts" | sed "s/^/\"nattr::$att\" -> \"act::/g" | sed "s/$/\"/g" >> $model
+[ -n "$nameattrs" ] && while IFS= read -r att ; do
+    acts=$(find "$outdir/$apkdir/" -type f -name "*.smali" ! -name "R*.smali" -exec "$GREP" --color=never -lE "R\\\$string;->${att}:I" {} + \
+        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" || basename -- "$f"; done)
+    if [ -n "$acts" ]; then
+        echo "$acts" | sed "s/^/\"nattr::$att\" -> \"act::/g" | sed "s/$/\"/g" >> "$model"
     fi
 done <<< "$nameattrs"
 
 # { images -> layouts }
-[ ! -z "$images" ] && while IFS= read -r img ; do
+[ -n "$images" ] && [ -d "$outdir/$apkdir/res/layout" ] && while IFS= read -r img ; do
     noext=${img%%.*}
-    lays=$(find $outdir/$apkdir/res/layout/ -type f -name "*.xml" -exec "$GREP" -lE "@drawable/$noext" {} \; | xargs -L 1 -r basename)
-    if [ ! -z "$lays" ]; then
-        echo "$lays" | sed "s/^/\"img::$img\" -> \"lay::/g" | sed "s/$/\"/g" >> $model
+    lays=$(find "$outdir/$apkdir/res/layout/" -type f -name "*.xml" -exec "$GREP" -lE "@drawable/$noext" {} + | while IFS= read -r f; do basename -- "$f"; done)
+    if [ -n "$lays" ]; then
+        echo "$lays" | sed "s/^/\"img::$img\" -> \"lay::/g" | sed "s/$/\"/g" >> "$model"
         layouts+=$'\n'
         layouts+="$lays"
         layouts+=$'\n'
@@ -182,11 +193,11 @@ layouts=$(awk 'NF && !seen[$0]++' <<<"$layouts")
 # TODO
 
 # { layouts -> toplevel layouts }
-[ ! -z "$layouts" ] && while IFS= read -r lay ; do
+[ -n "$layouts" ] && [ -d "$outdir/$apkdir/res/layout" ] && while IFS= read -r lay ; do
     noext=${lay%%.*}
     tops=$("$TOPLEVEL_SH" "$noext" "$outdir/$apkdir/res/layout/")
-    if [ ! -z "$tops" ]; then
-        echo "$tops" | sed "s/^/\"lay::$lay\" -> \"toplay::/g" | sed "s/$/\.xml\"/g" >> $model
+    if [ -n "$tops" ]; then
+        echo "$tops" | sed "s/^/\"lay::$lay\" -> \"toplay::/g" | sed "s/$/\.xml\"/g" >> "$model"
         toplayouts+=$'\n'
         toplayouts+=$(sed "s/$/\.xml/g" <<<"$tops")
         toplayouts+=$'\n'
@@ -197,12 +208,12 @@ toplayouts=$(awk 'NF && !seen[$0]++' <<<"$toplayouts")
 # { toplevel layouts -> fragments }
 # Layout resources use R$layout;->NAME:I in compiled code, same reasoning as
 # the string case above.
-[ ! -z "$toplayouts" ] && while IFS= read -r toplay ; do
+[ -n "$toplayouts" ] && while IFS= read -r toplay ; do
     noext=${toplay%%.*}
-    frags=$(find $outdir/$apkdir/ -type f -name "*.smali" -exec "$GREP" --color=never -lE "R\\\$layout;->${noext}:I" {} \; \
-        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" && basename "$f"; done)
-    if [ ! -z "$frags" ]; then
-        echo "$frags" | sed "s/^/\"toplay::$toplay\" -> \"frag::/g" | sed "s/$/\"/g" >> $model
+    frags=$(find "$outdir/$apkdir/" -type f -name "*.smali" -exec "$GREP" --color=never -lE "R\\\$layout;->${noext}:I" {} + \
+        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" && basename -- "$f"; done)
+    if [ -n "$frags" ]; then
+        echo "$frags" | sed "s/^/\"toplay::$toplay\" -> \"frag::/g" | sed "s/$/\"/g" >> "$model"
         fragments+=$'\n'
         fragments+="$frags"
         fragments+=$'\n'
@@ -211,26 +222,26 @@ done <<< "$toplayouts"
 fragments=$(awk 'NF && !seen[$0]++' <<<"$fragments")
 
 # { toplevel layouts -> activities }
-[ ! -z "$toplayouts" ] && while IFS= read -r toplay ; do
+[ -n "$toplayouts" ] && while IFS= read -r toplay ; do
     noext=${toplay%%.*}
-    acts=$(find $outdir/$apkdir/ -type f -name "*.smali" ! -name "R*.smali" -exec "$GREP" --color=never -lE "R\\\$layout;->${noext}:I" {} \; \
-        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" || basename "$f"; done)
-    if [ ! -z "$acts" ]; then
-        echo "$acts" | sed "s/^/\"toplay::$toplay\" -> \"act::/g" | sed "s/$/\"/g" >> $model
+    acts=$(find "$outdir/$apkdir/" -type f -name "*.smali" ! -name "R*.smali" -exec "$GREP" --color=never -lE "R\\\$layout;->${noext}:I" {} + \
+        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" || basename -- "$f"; done)
+    if [ -n "$acts" ]; then
+        echo "$acts" | sed "s/^/\"toplay::$toplay\" -> \"act::/g" | sed "s/$/\"/g" >> "$model"
     fi
 done <<< "$toplayouts"
 
 # { fragments -> activities }
-[ ! -z "$fragments" ] && while IFS= read -r fra ; do
+[ -n "$fragments" ] && while IFS= read -r fra ; do
     noext=${fra%%.*}
-    acts=$(find $outdir/$apkdir/ -type f -name "*.smali" ! -name "R*.smali" -exec "$GREP" --color=never -lE "$noext;-><init>\(" {} \; \
-        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" || basename "$f"; done)
-    if [ ! -z "$acts" ]; then
-        echo "$acts" | sed "s/^/\"frag::$fra\" -> \"act::/g" | sed "s/$/\"/g" >> $model
+    acts=$(find "$outdir/$apkdir/" -type f -name "*.smali" ! -name "R*.smali" -exec "$GREP" --color=never -lE "$noext;-><init>\(" {} \; \
+        | while IFS= read -r f; do "$GREP" --color=never -qEi "\.super.*fragment;" "$f" || basename -- "$f"; done)
+    if [ -n "$acts" ]; then
+        echo "$acts" | sed "s/^/\"frag::$fra\" -> \"act::/g" | sed "s/$/\"/g" >> "$model"
     fi
 done <<< "$fragments"
 
-echo '}' >> $model   # end dot graph
+echo '}' >> "$model"   # end dot graph
 
 #### Style the graph by node type, then render SVG ####
 # Extract every unique quoted node name used anywhere in the graph, and emit

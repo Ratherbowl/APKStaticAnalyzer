@@ -1,3 +1,4 @@
+import datetime
 import json
 import csv
 import os
@@ -11,10 +12,10 @@ import flow_droid_script as fd
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
-APK_INPUT_DIR = PROJECT_DIR / "apks"
-ARTIFACTS_DIR = PROJECT_DIR / "artifacts"
+APK_INPUT_DIR = PROJECT_DIR / "AccountDeletionAnalyzer_Ubuntu" / "apks"
+ARTIFACTS_DIR = PROJECT_DIR / "results"
 ADF_DIR = PROJECT_DIR / "AccountDeletionAnalyzer_Ubuntu"
-FLOWDROID_JAR = Path.home() / "FlowDroid" / "soot-infoflow-cmd-jar-with-dependencies.jar"
+FLOWDROID_JAR = PROJECT_DIR / "tools" / "flowdroid" / "soot-infoflow-cmd-2.13.0-jar-with-dependencies.jar"
 ANDROID_JARS = Path("/mnt/c/Users/darda.LAPTOP-P9KGA7VP/AppData/Local/Android/Sdk/platforms")
 
 MOBSF_URL = "http://localhost:8000"
@@ -64,21 +65,20 @@ def adfScan(app_id: str, apk_file: Path) -> dict[str, Path | None]:
     target_apk = apk_file.resolve() #got rid of the Path cast since already Path
     apk_stem = target_apk.stem
 
-    try:
-        # Loop unpacks each script key and its tuple pair (script path, output filename)
-        for key, (script_path, dot_filename) in scripts.items():
-            if not script_path.exists():
-                print(f"[!] ADF script {script_path} not found.")
-                continue
+    for key, (script_path, dot_filename) in scripts.items():
+        if not script_path.exists():
+            print(f"[!] ADF script {script_path} not found.")
+            continue
 
-            expected_dot = ADF_DIR / "output" / apk_stem / dot_filename
+        expected_dot = ADF_DIR / "output" / apk_stem / dot_filename
+        expected_dot.unlink(missing_ok=True)
 
-            #Safer file deletion
-            expected_dot.unlink(missing_ok=True)  # Remove old .dot file to prevent data collision between runs
-            
-            subprocess.run(
+        print(f"  -> Executing {script_path.name}...")
+        try:
+            res = subprocess.run(
                 ["bash", str(script_path), str(target_apk)],
                 cwd=str(ADF_DIR),
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -89,13 +89,14 @@ def adfScan(app_id: str, apk_file: Path) -> dict[str, Path | None]:
                 results[key] = expected_dot
                 print(f"[*] Success! Found {dot_filename} at {expected_dot}")
             else:
-                print(f"[!] {script_path.name} did not produce {expected_dot.name}")
-
-    except subprocess.TimeoutExpired:
-        print(f"[!] ADF script timed out for {app_id}.")
-    except Exception as e:
-        print(f"[!] ADF execution failed for {app_id}: {e}")
-        traceback.print_exc()
+                print(f"[!] {script_path.name} did not produce {expected_dot.name} (exit={res.returncode})")
+                if res.stderr.strip():
+                    print(f"    STDERR: {res.stderr.strip()[-500:]}")
+        except subprocess.TimeoutExpired:
+            print(f"[!] {script_path.name} timed out for {app_id}.")
+        except Exception as e:
+            print(f"[!] {script_path.name} execution failed for {app_id}: {e}")
+            traceback.print_exc()
 
     return results
 
@@ -110,7 +111,6 @@ def adfParse(deletion_dot: Path | None, health_dot: Path | None = None) -> dict:
         "adf_health_detected": "Yes" if health_evidence else "No",
     }
     
-
 def _parseExportedComponents(manifest_findings: list) -> dict:
     """Parses exported components findings from MobSF report."""
     # Loop through each finding and categorize exported components based on protection status
@@ -150,7 +150,6 @@ def _parseStorage(code_findings: dict) -> dict:
     insecure_storage = "Yes" if any(rule in code_findings for rule in insecure_storage_rules) else "No"
     
     return {"insecure_data_storage_detected": insecure_storage}
-
 
 def _parseCertificatePinning(code_findings: dict, net_findings: list) -> dict:
     """Parses certificate pinning findings from MobSF report."""
@@ -240,7 +239,7 @@ def mobsfParse(report_data: dict):
     # Call modular helper functions with pre-extracted data dictionaries
     exported_data = _parseExportedComponents(manifest_findings)
     encryption_data = _parseEncryption(code_findings, sbom_versioned)
-    storage_data = _parseStorage(code_findings, sbom_versioned)
+    storage_data = _parseStorage(code_findings)
     pinning_data = _parseCertificatePinning(code_findings, net_findings)
     webview_data = _parseWebviewRisks(code_findings)
     health_data = _parseHealthFindings(permissions, sbom_packages)
@@ -357,7 +356,7 @@ def _summarizeLeaks(leaks: list[dict], max_examples: int = 10) -> str:
         for leak in leaks)
 
     top_pairs = pair_counts.most_common(max_examples)
-    summary= "; ".join(f"{src} -> {snk} ({cnt}x)" for (src, snk), cnt in top_pairs)
+    summary = "; ".join(f"{src} -> {snk} ({cnt}x)" for (src, snk), cnt in top_pairs)
 
     remaining = len(pair_counts) - len(top_pairs)
 
@@ -440,19 +439,113 @@ def main(flowdroid_timeout: int = 1800, retry_fast: bool = True, run_by: str = "
         print(f"[*] All APKs already completed cleanly. Master CSV: {master_csv}")
         return
 
-    # Run pipeline app-by-app, appending and flushing after 
-#Outline for main function
-'''
-1. Check for existing master csv. If it exists, filter out already completed apps (separate helper function?)
-2. If not, define master csv (to be copied into primary excel sheet)
-3. Define csv headers (from Excel sheet)
-4. Open master csv in append/write mode and add headers and flush
-5. Loop through all APKs
-    - Collect app_id from APK filename
-    - Create output directory for this app (adf uses separate output folder from MobSF)
-    - Run MobSF scan and parse results
-    - Run ADF scans and parse results
-    - Merge Health Results from MobSF and ADF into one column
-    - Run FlowDroid analysis and parse results
-    - Commit and flush all results to master csv
-'''
+    # run pipleline app by app, appending and flushing after each
+    failed_apps = []
+    with open(master_csv, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
+        for idx, apk_path in enumerate(pending_apks, start=1):
+            app_id = apk_path.stem
+            app_out_dir = ARTIFACTS_DIR / app_id
+            app_out_dir.mkdir(parents=True, exist_ok=True)
+
+            print(f"\n{'=' * 60}\n[{idx}/{len(pending_apks)}] Processing: {apk_path.name} ({app_id})\n{'=' * 60}")
+
+            # Baseline row so a single tool failure doesn't prevent recording other results
+            row = {col: "Error" for col in CSV_HEADERS}
+            row.update({
+                "app_id": app_id,
+                "tool_used": "MobSF + ADF + FlowDroid",
+                "scan_date": datetime.date.today().isoformat(),
+                "raw_tool_output_path": str(app_out_dir),
+                "run_by": run_by,
+                "notes": "",
+                })
+
+            notes_parts = []
+
+            # MobSF Scan and Parse
+            mobsf_health = "No"
+            raw_mobsf = mobsfScan(app_id, apk_path, app_out_dir)
+            if raw_mobsf and "error" not in raw_mobsf:
+                mobsf_data = mobsfParse(raw_mobsf)
+                num_secrets = mobsf_data.get("num_hardcoded_secrets", 0)
+                mobsf_health = mobsf_data.get("health_related_findings", "No")
+
+                row.update({
+                    "num_dangerous_permissions": mobsf_data.get("num_dangerous_permissions", 0),
+                    "dangerous_permissions_list": mobsf_data.get("dangerous_permissions_list") or "None",
+                    "hardcoded_secret_found": "Yes" if num_secrets > 0 else "No",
+                    "num_hardcoded_secrets": num_secrets,
+                    "num_3rd_party_sdks": mobsf_data.get("num_3rd_party_sdks", 0),
+                    "sdk_list": mobsf_data.get("sdk_list") or "None",
+                    "cert_pinning_present": mobsf_data.get("cert_pinning", "No"),
+                    "encryption_at_rest_detected": mobsf_data.get("encryption_at_rest", "No"),
+                    "cleartext_traffic_allowed": mobsf_data.get("cleartext_traffic_allowed", "No"),
+                    "insecure_data_storage_detected": mobsf_data.get("insecure_data_storage_detected", "No"),
+                    "exported_components_unprotected": mobsf_data.get("exported_components_unprotected", "No"),
+                    "webview_insecure_config_detected": mobsf_data.get("webview_insecure_config_detected", "No"),
+                    "mobsf_status": mobsf_data.get("mobsf_status", "Success"),
+                })
+            else:
+                row["mobsf_status"] = "API Error"
+                notes_parts.append("MobSF scan failed or returned error.")
+
+            # ADF Scan and Parse
+            adf_dots = adfScan(app_id, apk_path)
+            del_dot = adf_dots.get("deletion")
+            health_dot = adf_dots.get("health")
+            adf_data = adfParse(del_dot, health_dot)
+
+            row["delete_account_class_found"] = adf_data["delete_account_class_found"]
+            row["delete_account_string_evidence"] = adf_data["delete_account_string_evidence"]
+
+            if del_dot and health_dot:
+                row["adf_status"] = "Success"
+            elif del_dot or health_dot:
+                row["adf_status"] = "Partial Success"
+                notes_parts.append("One ADF script did not produce a .dot file")
+            else:
+                row["adf_status"] = "Error"
+                notes_parts.append("Both ADF scripts failed to produce .dot files")
+
+            # Merge Health Findings from MobSF and ADF
+            adf_health = adf_data.get("adf_health_detected", "No")
+            row["health_related_permission_or_sdk_detected"] = ("Yes" if mobsf_health == "Yes" or adf_health == "Yes" else "No")
+
+            # FlowDroid Scan and Parse
+            print(f"[*] Running FlowDroid for {app_id}...")
+            try:
+                fd_res = fd.run_one(apk_path, flowdroid_dir, flowdroid_timeout, retry_fast)
+                row["sensitive_dataflow_count"] = fd_res["leaks_found"]
+                row["sensitive_dataflow_examples"] = _summarizeLeaks(fd_res["leaks"])
+                row["flowdroid_status"] = fd_res["status"]
+                if fd_res.get("notes"):
+                    notes_parts.append(fd_res["notes"])
+            except Exception as exc:
+                row["sensitive_dataflow_count"] = "Error"
+                row["sensitive_dataflow_examples"] = "Error"
+                row["flowdroid_status"] = f"Error: {exc}"
+                notes_parts.append(f"FlowDroid failed: {exc}")
+                traceback.print_exc()
+
+            row["notes"] = " | ".join(notes_parts)
+
+            # Write and Flush Immediately
+            writer.writerow(row)
+            f.flush()
+            os.fsync(f.fileno())
+
+            if not _isRowComplete(row):
+                failed_apps.append(app_id)
+
+            print(
+                f"[*] Saved {app_id} | MobSF: {row['mobsf_status']} | "
+                f"ADF: {row['adf_status']} | FlowDroid: {row['flowdroid_status']}"
+            )
+        print(f"\n{'=' * 60}")
+    print(f"[*] Batch run complete. Master CSV: {master_csv}")
+    if failed_apps:
+        print(f"[!] {len(failed_apps)} app(s) had errors and will be retried on next run: {', '.join(failed_apps)}")
+
+if __name__ == "__main__":
+    main()

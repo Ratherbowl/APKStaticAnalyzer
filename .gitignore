@@ -2,3 +2,4 @@ AccountDeletionAnalyzer/*
 AccountDeletionAnalyzer_Ubuntu/*
 results/*
 test/*
+__pycache__/*

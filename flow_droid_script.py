@@ -94,21 +94,25 @@ def run_one(apk: Path, out_dir: Path, timeout: int, retry_fast: bool) -> dict:
     out_xml = out_dir / "xml" / f"{name}.xml"
     log_file = out_dir / "logs" / f"{name}.log"  # named after the APK so reruns overwrite, not pile up
 
-    # Precise call graph first; with --retry-fast, a timeout gets one CHA retry.
+    # Precise call graph (SPARK) first; with retry_fast, retry once with CHA on timeout or SPARK crash.
     attempts = [False, True] if retry_fast else [False]
 
-    # Fresh log/XML so leftovers from older runs don't skew the checks.
+    # Fresh log so leftovers from older runs don't skew checks.
     log_file.write_text("", encoding="utf-8")
 
-    #Safer file deletion
-    out_xml.unlink(missing_ok=True)
-
     status = "error"
+    notes = ""
     used_fast = False
     start = time.time()
+
     for fast in attempts:
         used_fast = fast
+        notes = ""
+        out_xml.unlink(missing_ok=True)  # Clear any partial XML before each attempt
         cmd = build_command(apk, out_xml, fast, timeout)
+
+        # Record byte offset so check_log() only inspects this attempt's output
+        log_offset = log_file.stat().st_size
         with open(log_file, "a", encoding="utf-8") as log:  # append: a CHA retry lands in the same log
             log.write(f"\n=== Command: {' '.join(cmd)}\n")
             log.flush()  # so the command line appears before Java's output
@@ -118,14 +122,21 @@ def run_one(apk: Path, out_dir: Path, timeout: int, retry_fast: bool) -> dict:
                 status = "ok" if proc.returncode == 0 else f"error({proc.returncode})"
             except subprocess.TimeoutExpired:
                 status = "timeout"
+                notes = f"timed out after {timeout}s"
                 log.write(f"\n=== Timed out after {timeout}s\n")
-        if status != "timeout":
-            break  # a crash would just crash again with CHA; only timeouts are retried
 
-    # Exit code 0 isn't proof of success - confirm from log.
-    notes = ""
-    if status == "ok":
-        status, notes = check_log(log_file)
+        attempt_text = log_file.read_text(encoding="utf-8", errors="ignore")[log_offset:]
+
+        # Exit code 0 isn't proof of success - confirm from this attempt's log output.
+        if status == "ok":
+            status, notes = check_log(attempt_text)
+
+        is_spark_crash = status.startswith("error") and (
+            "soot.jimple.spark" in attempt_text or "callgraph" in notes.lower()
+        )
+        if status != "timeout" and not is_spark_crash:
+            break  # Only retry timeouts and SPARK/callgraph crashes with CHA
+
     if status == "ok" and used_fast:
         status = "ok(CHA)"  # less precise result
 
@@ -140,11 +151,9 @@ def run_one(apk: Path, out_dir: Path, timeout: int, retry_fast: bool) -> dict:
     }
 
 
-
-
-def check_log(log_file: Path) -> tuple[str, str]:
+def check_log(log_source: Path | str) -> tuple[str, str]:
     """Return (status, notes) for a run that exited normally. "ok" requires a "Found N leaks" line."""
-    text = log_file.read_text(encoding="utf-8", errors="ignore")
+    text = log_source.read_text(encoding="utf-8", errors="ignore") if isinstance(log_source, Path) else log_source
     notes = []
 
     #helper function to make the return statement cleaner
